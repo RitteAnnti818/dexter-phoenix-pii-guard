@@ -21,13 +21,14 @@ Intelligent meta-tool for financial data research. Takes a natural language quer
 - Analyst estimates and price targets
 - Company news and announcements
 - Insider trading activity
+- Current stock prices for equities
 - Cryptocurrency prices
 - Revenue segment breakdowns
 - Multi-company comparisons (pass the full query, it handles routing internally)
 
 ## When NOT to Use
 
-- Stock prices, current or historical (use web_search instead)
+- Historical stock prices (use web_search instead)
 - General web searches or non-financial topics (use web_search instead)
 - Questions that don't require external financial data (answer directly from knowledge)
 - Non-public company information
@@ -54,10 +55,12 @@ import { getAnalystEstimates } from './estimates.js';
 import { getSegmentedRevenues } from './segments.js';
 import { getCryptoPriceSnapshot, getCryptoPrices, getCryptoTickers } from './crypto.js';
 import { getInsiderTrades } from './insider_trades.js';
+import { getStockPrice } from './stock-price.js';
 
 // All finance tools available for routing
 const FINANCE_TOOLS: StructuredToolInterface[] = [
   // Price Data
+  getStockPrice,
   getCryptoPriceSnapshot,
   getCryptoPrices,
   getCryptoTickers,
@@ -97,6 +100,7 @@ Given a user's natural language query about financial data, call the appropriate
    - "YTD" → start_date Jan 1 of current year, end_date today
 
 3. **Tool Selection**:
+   - For a current stock quote/snapshot (price now) → get_stock_price
    - For "historical" or "over time" data, use date-range tools
    - For P/E ratio, market cap, valuation metrics → get_key_ratios
    - For revenue, earnings, profitability → get_income_statements
@@ -129,7 +133,8 @@ export function createFinancialSearch(model: string): DynamicStructuredTool {
 - Financial metrics (P/E ratio, market cap, EPS, dividend yield)
 - Analyst estimates and price targets
 - Insider trading activity
-- Cryptocurrency prices. For stock prices (current or historical) use web_search instead.`,
+- Current stock prices
+- Cryptocurrency prices. For historical stock prices use web_search instead.`,
     schema: FinancialSearchInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;

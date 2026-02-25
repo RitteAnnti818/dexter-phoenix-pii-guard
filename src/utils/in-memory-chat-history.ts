@@ -1,5 +1,10 @@
 import { createHash } from 'crypto';
 import { callLlm, DEFAULT_MODEL } from '../model/llm.js';
+import {
+  DEFAULT_HISTORY_LIMIT,
+  FULL_ANSWER_TURNS,
+  type HistoryEntry,
+} from './history-context.js';
 import { z } from 'zod';
 
 /**
@@ -38,10 +43,12 @@ Return only message IDs that contain information directly useful for answering t
 export class InMemoryChatHistory {
   private messages: Message[] = [];
   private model: string;
+  private readonly maxTurns: number;
   private relevantMessagesByQuery: Map<string, Message[]> = new Map();
 
-  constructor(model: string = DEFAULT_MODEL) {
+  constructor(model: string = DEFAULT_MODEL, maxTurns: number = DEFAULT_HISTORY_LIMIT) {
     this.model = model;
+    this.maxTurns = maxTurns;
   }
 
   /**
@@ -205,6 +212,32 @@ Select which previous messages are relevant to understanding or answering the cu
    */
   getUserMessages(): string[] {
     return this.messages.map((message) => message.query);
+  }
+
+  /**
+   * Returns recent completed turns as alternating user/assistant entries.
+   * Uses full answers for the most recent turns and summaries for older ones.
+   */
+  getRecentTurns(limit: number = this.maxTurns): HistoryEntry[] {
+    const boundedLimit = Math.max(0, limit);
+    if (boundedLimit === 0) {
+      return [];
+    }
+
+    const completedMessages = this.messages.filter((message) => message.answer !== null);
+    const recentMessages = completedMessages.slice(-boundedLimit);
+
+    return recentMessages.flatMap((message, index) => {
+      const isRecentTurn = index >= recentMessages.length - FULL_ANSWER_TURNS;
+      const assistantContent = isRecentTurn
+        ? message.answer
+        : (message.summary ?? message.answer);
+
+      return [
+        { role: 'user', content: message.query },
+        { role: 'assistant', content: assistantContent ?? '' },
+      ];
+    });
   }
 
   /**

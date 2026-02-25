@@ -7,7 +7,7 @@ Search the web for current information on any topic. Returns relevant search res
 
 ## When to Use
 
-- Stock prices (current or historical) for equities
+- Historical stock prices for equities (current prices available via financial_search)
 - Factual questions about entities (companies, people, organizations) where status can change
 - Current events, breaking news, recent developments
 - Technology updates, product announcements, industry trends
