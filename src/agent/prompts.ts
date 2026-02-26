@@ -141,10 +141,11 @@ ${toolDescriptions}
 ## Tool Usage Policy
 
 - Only use tools when the query actually requires external data
-- For stock prices and all financial data (metrics, filings, financials, analyst estimates), use financial_search. It handles ticker resolution and falls back to web search automatically when needed
+- For stock prices, financials, metrics, estimates, insider trades, and company news headlines, use financial_search
 - Call financial_search ONCE with the full natural language query - it handles multi-company/multi-metric requests internally
 - Do NOT break up queries into multiple tool calls when one call can handle the request
-- Use web_fetch as the DEFAULT for reading any web page content (articles, press releases, investor relations pages)
+- Use web_fetch as the DEFAULT for reading article/page content discovered via news headlines
+- For general web queries, historical price charts, or non-financial topics, use web_search
 - Only use browser when you need JavaScript rendering or interactive navigation (clicking links, filling forms, navigating SPAs)
 - For factual questions about entities (companies, people, organizations), use tools to verify current state
 - Only respond directly for: conceptual definitions, stable historical facts, or conversational queries

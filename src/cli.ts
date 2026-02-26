@@ -144,8 +144,6 @@ function renderHistory(chatLog: ChatLogComponent, history: AgentRunnerController
       }
 
       if (event.type === 'tool_limit') {
-        const limit = chatLog.startTool(display.id, event.tool, {});
-        limit.setLimitWarning(event.warning);
         continue;
       }
 

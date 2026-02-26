@@ -136,6 +136,8 @@ export class ChatLogComponent extends Container {
   private readonly toolById = new Map<string, ToolDisplayComponent>();
   private currentBrowserSession: BrowserSessionComponent | null = null;
   private activeAnswer: AnswerBoxComponent | null = null;
+  private lastToolName: string | null = null;
+  private lastToolComponent: ToolDisplayComponent | null = null;
 
   constructor(tui: TUI) {
     super();
@@ -147,6 +149,8 @@ export class ChatLogComponent extends Container {
     this.toolById.clear();
     this.currentBrowserSession = null;
     this.activeAnswer = null;
+    this.lastToolName = null;
+    this.lastToolComponent = null;
   }
 
   addQuery(query: string) {
@@ -176,13 +180,23 @@ export class ChatLogComponent extends Container {
       this.currentBrowserSession.setStep(args);
       this.currentBrowserSession.setActive();
       this.toolById.set(toolCallId, this.currentBrowserSession);
+      this.lastToolName = null;
+      this.lastToolComponent = null;
       return this.currentBrowserSession;
+    }
+
+    if (this.lastToolName === toolName && this.lastToolComponent) {
+      this.lastToolComponent.setActive();
+      this.toolById.set(toolCallId, this.lastToolComponent);
+      return this.lastToolComponent;
     }
 
     const component = new ToolEventComponent(this.tui, toolName, args);
     component.setActive();
     this.toolById.set(toolCallId, component);
     this.addChild(component);
+    this.lastToolName = toolName;
+    this.lastToolComponent = component;
     return component;
   }
 

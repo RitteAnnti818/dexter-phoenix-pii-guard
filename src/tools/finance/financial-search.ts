@@ -19,7 +19,7 @@ Intelligent meta-tool for financial data research. Takes a natural language quer
 - Company financials (income statements, balance sheets, cash flow statements)
 - Financial metrics (P/E ratio, market cap, EPS, dividend yield, enterprise value)
 - Analyst estimates and price targets
-- Company news and announcements
+- Company news and recent headlines
 - Insider trading activity
 - Current stock prices for equities
 - Cryptocurrency prices
@@ -38,6 +38,7 @@ Intelligent meta-tool for financial data research. Takes a natural language quer
 
 - Call ONCE with the complete natural language query - the tool handles complexity internally
 - For comparisons like "compare AAPL vs MSFT revenue", pass the full query as-is
+- For price move explanations and catalysts, this tool can return both price and news headlines
 - Handles ticker resolution automatically (Apple -> AAPL, Microsoft -> MSFT)
 - Handles date inference (e.g., "last quarter", "past 5 years", "YTD")
 - Returns structured JSON data with source URLs for verification
@@ -56,6 +57,7 @@ import { getSegmentedRevenues } from './segments.js';
 import { getCryptoPriceSnapshot, getCryptoPrices, getCryptoTickers } from './crypto.js';
 import { getInsiderTrades } from './insider_trades.js';
 import { getStockPrice } from './stock-price.js';
+import { getCompanyNews } from './news.js';
 
 // All finance tools available for routing
 const FINANCE_TOOLS: StructuredToolInterface[] = [
@@ -72,6 +74,8 @@ const FINANCE_TOOLS: StructuredToolInterface[] = [
   // Key Ratios & Estimates
   getKeyRatios,
   getAnalystEstimates,
+  // News
+  getCompanyNews,
   // Other Data
   getInsiderTrades,
   getSegmentedRevenues,
@@ -106,6 +110,8 @@ Given a user's natural language query about financial data, call the appropriate
    - For revenue, earnings, profitability → get_income_statements
    - For debt, assets, equity → get_balance_sheets
    - For cash flow, free cash flow → get_cash_flow_statements
+   - For news, catalysts, "why did X move", recent announcements → get_company_news
+   - For "why did X go up/down" → combine get_stock_price + get_company_news
    - For comprehensive analysis → get_all_financial_statements
 
 4. **Efficiency**:
@@ -137,6 +143,7 @@ export function createFinancialSearch(model: string): DynamicStructuredTool {
 - Company financials (income statements, balance sheets, cash flow)
 - Financial metrics (P/E ratio, market cap, EPS, dividend yield)
 - Analyst estimates and price targets
+- Company news and recent headlines
 - Insider trading activity
 - Current stock prices
 - Cryptocurrency prices. For historical stock prices use web_search instead.`,
