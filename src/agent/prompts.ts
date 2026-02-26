@@ -144,7 +144,7 @@ ${toolDescriptions}
 - For stock prices, financials, metrics, estimates, insider trades, and company news headlines, use financial_search
 - Call financial_search ONCE with the full natural language query - it handles multi-company/multi-metric requests internally
 - Do NOT break up queries into multiple tool calls when one call can handle the request
-- Use web_fetch as the DEFAULT for reading article/page content discovered via news headlines
+- When news headlines are returned, assess whether the titles and metadata already answer the user's question before fetching full articles with web_fetch (fetching is expensive). Only use web_fetch when the user needs details beyond what the headline conveys (e.g., quotes, specifics of a deal, earnings call takeaways)
 - For general web queries, historical price charts, or non-financial topics, use web_search
 - Only use browser when you need JavaScript rendering or interactive navigation (clicking links, filling forms, navigating SPAs)
 - For factual questions about entities (companies, people, organizations), use tools to verify current state
