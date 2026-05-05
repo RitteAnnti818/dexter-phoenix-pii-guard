@@ -1,5 +1,11 @@
 import { AIMessage, AIMessageChunk, SystemMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
+import { context as otelContext, trace, SpanStatusCode, type Span } from '@opentelemetry/api';
+import {
+  OpenInferenceSpanKind,
+  SemanticConventions,
+  MimeType,
+} from '@arizeai/openinference-semantic-conventions';
 import { callLlmWithMessages, streamLlmWithMessages } from '../model/llm.js';
 import { getTools, getToolConcurrencyMap } from '../tools/registry.js';
 import { buildSystemPrompt, loadSoulDocument, loadRulesDocument } from './prompts.js';
@@ -18,6 +24,11 @@ import { AgentToolExecutor } from './tool-executor.js';
 import { MemoryManager } from '../memory/index.js';
 import { runMemoryFlush, shouldRunMemoryFlush } from '../memory/flush.js';
 import { resolveProvider } from '../providers.js';
+import { getTracer } from '../observability/telemetry.js';
+
+// Cap span attribute string size — Phoenix UI struggles with multi-MB blobs.
+const SPAN_ATTR_MAX_LEN = 4000;
+const truncate = (s: string, n = SPAN_ATTR_MAX_LEN) => (s.length > n ? `${s.slice(0, n)}...` : s);
 
 
 const DEFAULT_MODEL = 'gpt-5.4';
@@ -121,49 +132,183 @@ export class Agent {
       new HumanMessage(query),
     ];
 
-    // Main agent loop
-    let overflowRetries = 0;
-    while (ctx.iteration < this.maxIterations) {
-      ctx.iteration++;
+    // ─── OpenInference: AGENT span wraps the whole run ───────────────────
+    const tracer = getTracer();
+    const agentSpan = tracer.startSpan('Agent.run', {
+      attributes: {
+        [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.AGENT,
+        [SemanticConventions.AGENT_NAME]: 'dexter',
+        [SemanticConventions.LLM_MODEL_NAME]: this.model,
+        [SemanticConventions.INPUT_VALUE]: truncate(query),
+        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
+      },
+    });
+    const agentCtx = trace.setSpan(otelContext.active(), agentSpan);
+    this.toolExecutor.setParentContext(agentCtx);
 
-      // Microcompact: per-turn lightweight trimming before LLM call
-      const mcResult = microcompactMessages(messages);
-      if (mcResult.trigger) {
-        messages = mcResult.messages;
-        yield { type: 'microcompact', cleared: mcResult.cleared, tokensSaved: mcResult.estimatedTokensSaved } as MicrocompactEvent;
-      }
+    let finalAnswerForSpan = '';
+    let agentError: unknown = undefined;
 
-      // Strip old reasoning from AIMessages (keep last 2 for continuity)
-      this.stripOldThinking(messages, 2);
+    try {
+      // Main agent loop
+      let overflowRetries = 0;
+      while (ctx.iteration < this.maxIterations) {
+        ctx.iteration++;
 
-      let response: AIMessage;
-      let usage: TokenUsage | undefined;
+        // Microcompact: per-turn lightweight trimming before LLM call
+        const mcResult = microcompactMessages(messages);
+        if (mcResult.trigger) {
+          messages = mcResult.messages;
+          yield { type: 'microcompact', cleared: mcResult.cleared, tokensSaved: mcResult.estimatedTokensSaved } as MicrocompactEvent;
+        }
 
-      // Call LLM with streaming (falls back to blocking on error)
-      while (true) {
+        // Strip old reasoning from AIMessages (keep last 2 for continuity)
+        this.stripOldThinking(messages, 2);
+
+        let response: AIMessage;
+        let usage: TokenUsage | undefined;
+
+        // ─── CHAIN span (planning/reflection) + LLM span per iteration ───
+        const chainName = ctx.iteration === 1 ? 'planning' : `reflection (iteration ${ctx.iteration})`;
+        const chainSpan = tracer.startSpan(
+          chainName,
+          {
+            attributes: {
+              [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.CHAIN,
+              'iteration.index': ctx.iteration,
+            },
+          },
+          agentCtx,
+        );
+        const chainCtx = trace.setSpan(agentCtx, chainSpan);
+
+        const llmSpan = tracer.startSpan(
+          'llm.chat',
+          {
+            attributes: {
+              [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.LLM,
+              [SemanticConventions.LLM_MODEL_NAME]: this.model,
+              [SemanticConventions.LLM_PROVIDER]: resolveProvider(this.model).id,
+              'llm.input_messages.count': messages.length,
+              [SemanticConventions.INPUT_VALUE]: truncate(this.summarizeMessagesForSpan(messages)),
+              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+            },
+          },
+          chainCtx,
+        );
+        const llmCtx = trace.setSpan(chainCtx, llmSpan);
+
         try {
-          const result = await this.callModelWithStreaming(messages);
-          response = result.response;
-          usage = result.usage;
-          overflowRetries = 0;
-          break;
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          // Call LLM with streaming (falls back to blocking on error)
+          while (true) {
+            try {
+              const result = await otelContext.with(llmCtx, () =>
+                this.callModelWithStreaming(messages),
+              );
+              response = result.response;
+              usage = result.usage;
+              overflowRetries = 0;
+              break;
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
 
-          if (isContextOverflowError(errorMessage) && overflowRetries < MAX_OVERFLOW_RETRIES) {
-            overflowRetries++;
-            const removed = this.truncateMessages(messages, OVERFLOW_KEEP_ROUNDS);
-            if (removed > 0) {
-              yield { type: 'context_cleared', clearedCount: removed, keptCount: OVERFLOW_KEEP_ROUNDS };
-              continue;
+              if (isContextOverflowError(errorMessage) && overflowRetries < MAX_OVERFLOW_RETRIES) {
+                overflowRetries++;
+                const removed = this.truncateMessages(messages, OVERFLOW_KEEP_ROUNDS);
+                if (removed > 0) {
+                  yield { type: 'context_cleared', clearedCount: removed, keptCount: OVERFLOW_KEEP_ROUNDS };
+                  continue;
+                }
+              }
+
+              llmSpan.recordException(error as Error);
+              llmSpan.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage });
+              chainSpan.setStatus({ code: SpanStatusCode.ERROR });
+              agentError = error;
+
+              const totalTime = Date.now() - ctx.startTime;
+              const provider = resolveProvider(this.model).displayName;
+              yield {
+                type: 'done',
+                answer: `Error: ${formatUserFacingError(errorMessage, provider)}`,
+                toolCalls: ctx.scratchpad.getToolCallRecords(),
+                iterations: ctx.iteration,
+                totalTime,
+                tokenUsage: ctx.tokenCounter.getUsage(),
+                tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+              };
+              return;
             }
           }
+        } finally {
+          if (usage) {
+            llmSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT, usage.inputTokens);
+            llmSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, usage.outputTokens);
+            llmSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, usage.totalTokens);
+          }
+          if (response!) {
+            const responseText = extractTextContent(response!) ?? '';
+            llmSpan.setAttribute(SemanticConventions.OUTPUT_VALUE, truncate(responseText));
+            llmSpan.setAttribute(SemanticConventions.OUTPUT_MIME_TYPE, MimeType.TEXT);
+            const toolCallsCount = response!.tool_calls?.length ?? 0;
+            llmSpan.setAttribute('llm.tool_calls.count', toolCallsCount);
+            chainSpan.setAttribute('chain.tool_calls.count', toolCallsCount);
+          }
+          llmSpan.end();
+          chainSpan.end();
+        }
 
+        ctx.tokenCounter.add(usage);
+        if (usage?.inputTokens) {
+          ctx.lastApiInputTokens = usage.inputTokens;
+        }
+
+        const responseText = extractTextContent(response);
+
+        // Emit thinking if there are also tool calls
+        if (responseText?.trim() && hasToolCalls(response)) {
+          const trimmedText = responseText.trim();
+          ctx.scratchpad.addThinking(trimmedText);
+          yield { type: 'thinking', message: trimmedText };
+        }
+
+        // No tool calls = final answer
+        if (!hasToolCalls(response)) {
+          finalAnswerForSpan = responseText ?? '';
+          yield* this.handleDirectResponse(responseText ?? '', ctx);
+          return;
+        }
+
+        // Push AIMessage to conversation history
+        messages.push(response);
+
+        // Execute tools concurrently where safe, collect ToolMessages by ID
+        let { toolMessages, denied } = yield* this.executeToolsAndCollectMessages(response, ctx);
+
+        // Cap large results (persist to disk, inject preview)
+        toolMessages = toolMessages.map(tm => {
+          const content = typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content);
+          if (exceedsSizeCap(content)) {
+            const { preview, filePath } = persistLargeResult(tm.name ?? 'unknown', tm.tool_call_id, content);
+            return new ToolMessage({
+              content: buildPersistedContent(filePath, preview, content.length),
+              tool_call_id: tm.tool_call_id,
+              name: tm.name,
+            });
+          }
+          return tm;
+        });
+
+        // Enforce per-turn total budget
+        toolMessages = enforceResultBudget(toolMessages);
+
+        messages.push(...toolMessages);
+
+        if (denied) {
           const totalTime = Date.now() - ctx.startTime;
-          const provider = resolveProvider(this.model).displayName;
           yield {
             type: 'done',
-            answer: `Error: ${formatUserFacingError(errorMessage, provider)}`,
+            answer: '',
             toolCalls: ctx.scratchpad.getToolCallRecords(),
             iterations: ctx.iteration,
             totalTime,
@@ -172,97 +317,79 @@ export class Agent {
           };
           return;
         }
-      }
 
-      ctx.tokenCounter.add(usage);
-      if (usage?.inputTokens) {
-        ctx.lastApiInputTokens = usage.inputTokens;
-      }
+        // Context threshold management (may compact the message array)
+        const messageState = { messages };
+        yield* this.manageContextThreshold(ctx, query, memoryFlushState, messageState);
+        messages = messageState.messages;
 
-      const responseText = extractTextContent(response);
-
-      // Emit thinking if there are also tool calls
-      if (responseText?.trim() && hasToolCalls(response)) {
-        const trimmedText = responseText.trim();
-        ctx.scratchpad.addThinking(trimmedText);
-        yield { type: 'thinking', message: trimmedText };
-      }
-
-      // No tool calls = final answer
-      if (!hasToolCalls(response)) {
-        yield* this.handleDirectResponse(responseText ?? '', ctx);
-        return;
-      }
-
-      // Push AIMessage to conversation history
-      messages.push(response);
-
-      // Execute tools concurrently where safe, collect ToolMessages by ID
-      let { toolMessages, denied } = yield* this.executeToolsAndCollectMessages(response, ctx);
-
-      // Cap large results (persist to disk, inject preview)
-      toolMessages = toolMessages.map(tm => {
-        const content = typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content);
-        if (exceedsSizeCap(content)) {
-          const { preview, filePath } = persistLargeResult(tm.name ?? 'unknown', tm.tool_call_id, content);
-          return new ToolMessage({
-            content: buildPersistedContent(filePath, preview, content.length),
-            tool_call_id: tm.tool_call_id,
-            name: tm.name,
-          });
+        // Inject tool usage warning if approaching limits
+        const toolUsageWarning = ctx.scratchpad.formatToolUsageForPrompt();
+        if (toolUsageWarning) {
+          messages.push(new HumanMessage(toolUsageWarning));
         }
-        return tm;
+
+        // Drain queued messages: user may have sent follow-ups while agent was working
+        const drainResult = this.drainQueue();
+        if (drainResult) {
+          messages.push(new HumanMessage(drainResult.text));
+          yield { type: 'queue_drain', messageCount: drainResult.count, mergedText: drainResult.text } as QueueDrainEvent;
+        }
+      }
+
+      // Max iterations reached
+      const totalTime = Date.now() - ctx.startTime;
+      yield {
+        type: 'done',
+        answer: `Reached maximum iterations (${this.maxIterations}). I was unable to complete the research in the allotted steps.`,
+        toolCalls: ctx.scratchpad.getToolCallRecords(),
+        iterations: ctx.iteration,
+        totalTime,
+        tokenUsage: ctx.tokenCounter.getUsage(),
+        tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+      };
+    } catch (err) {
+      agentError = err;
+      agentSpan.recordException(err as Error);
+      agentSpan.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
       });
-
-      // Enforce per-turn total budget
-      toolMessages = enforceResultBudget(toolMessages);
-
-      messages.push(...toolMessages);
-
-      if (denied) {
-        const totalTime = Date.now() - ctx.startTime;
-        yield {
-          type: 'done',
-          answer: '',
-          toolCalls: ctx.scratchpad.getToolCallRecords(),
-          iterations: ctx.iteration,
-          totalTime,
-          tokenUsage: ctx.tokenCounter.getUsage(),
-          tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
-        };
-        return;
+      throw err;
+    } finally {
+      this.toolExecutor.setParentContext(undefined);
+      agentSpan.setAttribute('agent.iterations', ctx.iteration);
+      agentSpan.setAttribute('agent.duration_ms', Date.now() - startTime);
+      agentSpan.setAttribute(
+        'agent.tool_calls.count',
+        ctx.scratchpad.getToolCallRecords().length,
+      );
+      const usageTotals = ctx.tokenCounter.getUsage();
+      if (usageTotals) {
+        agentSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT, usageTotals.inputTokens);
+        agentSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, usageTotals.outputTokens);
+        agentSpan.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, usageTotals.totalTokens);
       }
-
-      // Context threshold management (may compact the message array)
-      const messageState = { messages };
-      yield* this.manageContextThreshold(ctx, query, memoryFlushState, messageState);
-      messages = messageState.messages;
-
-      // Inject tool usage warning if approaching limits
-      const toolUsageWarning = ctx.scratchpad.formatToolUsageForPrompt();
-      if (toolUsageWarning) {
-        messages.push(new HumanMessage(toolUsageWarning));
+      if (!agentError) {
+        agentSpan.setAttribute(SemanticConventions.OUTPUT_VALUE, truncate(finalAnswerForSpan));
+        agentSpan.setAttribute(SemanticConventions.OUTPUT_MIME_TYPE, MimeType.TEXT);
       }
-
-      // Drain queued messages: user may have sent follow-ups while agent was working
-      const drainResult = this.drainQueue();
-      if (drainResult) {
-        messages.push(new HumanMessage(drainResult.text));
-        yield { type: 'queue_drain', messageCount: drainResult.count, mergedText: drainResult.text } as QueueDrainEvent;
-      }
+      agentSpan.end();
     }
+  }
 
-    // Max iterations reached
-    const totalTime = Date.now() - ctx.startTime;
-    yield {
-      type: 'done',
-      answer: `Reached maximum iterations (${this.maxIterations}). I was unable to complete the research in the allotted steps.`,
-      toolCalls: ctx.scratchpad.getToolCallRecords(),
-      iterations: ctx.iteration,
-      totalTime,
-      tokenUsage: ctx.tokenCounter.getUsage(),
-      tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
-    };
+  /**
+   * Compact serialization of recent messages for span attributes.
+   * Keeps only role + content snippets to avoid blowing past attr size caps.
+   */
+  private summarizeMessagesForSpan(messages: BaseMessage[]): string {
+    const lastN = messages.slice(-5);
+    const out = lastN.map((m) => {
+      const role = m._getType();
+      const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      return { role, content: text.slice(0, 500) };
+    });
+    return JSON.stringify(out);
   }
 
   // ---------------------------------------------------------------------------
