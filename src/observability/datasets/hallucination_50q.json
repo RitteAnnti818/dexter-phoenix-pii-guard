@@ -1,0 +1,651 @@
+[
+  {
+    "id": "Q001",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 2024 회계연도 총매출(net sales)을 알려주세요.",
+    "ground_truth": {
+      "answer": "$391.04B",
+      "source": "AAPL 10-K FY2024 (fiscal year ended September 28, 2024)",
+      "acceptable_range": [387.0, 395.0]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q002",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 FY2024 순이익(net income)은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$93.74B",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [92.8, 94.7]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q003",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 FY2023 총매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$383.29B",
+      "source": "AAPL 10-K FY2023 (fiscal year ended September 30, 2023)",
+      "acceptable_range": [379.5, 387.1]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q004",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 FY2024 R&D 지출액을 알려주세요.",
+    "ground_truth": {
+      "answer": "$31.37B",
+      "source": "AAPL 10-K FY2024 income statement",
+      "acceptable_range": [31.05, 31.69]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q005",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "NVIDIA의 FY2024(2024년 1월 28일 종료) 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$60.92B",
+      "source": "NVDA 10-K FY2024 (fiscal year ended January 28, 2024)",
+      "acceptable_range": [60.31, 61.53]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q006",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "NVIDIA의 FY2024 순이익은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$29.76B",
+      "source": "NVDA 10-K FY2024",
+      "acceptable_range": [29.46, 30.06]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q007",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "NVIDIA의 FY2025(2025년 1월 26일 종료) 매출을 알려주세요.",
+    "ground_truth": {
+      "answer": "$130.50B",
+      "source": "NVDA 10-K FY2025 / FY2025 Q4 earnings release (Feb 26, 2025)",
+      "acceptable_range": [129.20, 131.81]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q008",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "NVIDIA의 FY2023 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$26.97B",
+      "source": "NVDA 10-K FY2023 (fiscal year ended January 29, 2023)",
+      "acceptable_range": [26.70, 27.24]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q009",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Microsoft의 FY2024(2024년 6월 30일 종료) 총매출은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$245.12B",
+      "source": "MSFT 10-K FY2024 (fiscal year ended June 30, 2024)",
+      "acceptable_range": [242.67, 247.57]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q010",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Microsoft의 FY2024 순이익을 알려주세요.",
+    "ground_truth": {
+      "answer": "$88.14B",
+      "source": "MSFT 10-K FY2024",
+      "acceptable_range": [87.26, 89.02]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q011",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Microsoft의 FY2023 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$211.92B",
+      "source": "MSFT 10-K FY2023 (fiscal year ended June 30, 2023)",
+      "acceptable_range": [209.80, 214.04]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q012",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Microsoft의 FY2024 영업이익(operating income)을 알려주세요.",
+    "ground_truth": {
+      "answer": "$109.43B",
+      "source": "MSFT 10-K FY2024",
+      "acceptable_range": [108.34, 110.52]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q013",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 FY2024 영업이익은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$123.22B",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [121.99, 124.45]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q014",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Apple의 FY2024 희석 주당순이익(diluted EPS)은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$6.08",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [6.02, 6.14]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q015",
+    "level": "easy",
+    "category": "factual_lookup",
+    "question": "Microsoft의 FY2024 R&D 지출액을 알려주세요.",
+    "ground_truth": {
+      "answer": "$29.51B",
+      "source": "MSFT 10-K FY2024 income statement",
+      "acceptable_range": [29.21, 29.81]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q016",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "Apple의 FY2023 대비 FY2024 매출 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 2.0%",
+      "formula": "(391.04 / 383.29 - 1) * 100",
+      "source": "AAPL 10-K FY2023, FY2024",
+      "acceptable_range": [1.5, 2.5]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q017",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "NVIDIA의 FY2023 대비 FY2024 매출 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 125.9%",
+      "formula": "(60.92 / 26.97 - 1) * 100",
+      "source": "NVDA 10-K FY2023, FY2024",
+      "acceptable_range": [123.4, 128.4]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q018",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "Microsoft의 FY2023 대비 FY2024 매출 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 15.7%",
+      "formula": "(245.12 / 211.92 - 1) * 100",
+      "source": "MSFT 10-K FY2023, FY2024",
+      "acceptable_range": [15.3, 16.1]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q019",
+    "level": "medium",
+    "category": "segment",
+    "question": "Apple의 FY2024 iPhone 부문 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$201.18B",
+      "source": "AAPL 10-K FY2024 segment breakdown",
+      "acceptable_range": [199.17, 203.19]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q020",
+    "level": "medium",
+    "category": "segment",
+    "question": "Apple의 FY2024 Services 부문 매출은 얼마인가요?",
+    "ground_truth": {
+      "answer": "$96.17B",
+      "source": "AAPL 10-K FY2024 segment breakdown",
+      "acceptable_range": [95.21, 97.13]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q021",
+    "level": "medium",
+    "category": "segment",
+    "question": "NVIDIA의 FY2024 Data Center 부문 매출을 알려주세요.",
+    "ground_truth": {
+      "answer": "약 $47.5B",
+      "source": "NVDA 10-K FY2024 segment data",
+      "acceptable_range": [46.55, 48.45]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q022",
+    "level": "medium",
+    "category": "segment",
+    "question": "Microsoft의 FY2024 Intelligent Cloud 부문 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "$105.36B",
+      "source": "MSFT 10-K FY2024 segment data",
+      "acceptable_range": [104.31, 106.41]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q023",
+    "level": "medium",
+    "category": "yoy_comparison",
+    "question": "Apple의 FY2023 대비 FY2024 순이익 변화율은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 -3.4%",
+      "formula": "(93.74 / 96.99 - 1) * 100",
+      "source": "AAPL 10-K FY2023, FY2024",
+      "acceptable_range": [-4.0, -2.8]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q024",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "NVIDIA의 FY2024 대비 FY2025 매출 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 114.2%",
+      "formula": "(130.50 / 60.92 - 1) * 100",
+      "source": "NVDA 10-K FY2024, FY2025",
+      "acceptable_range": [112.0, 116.5]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q025",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "Microsoft Intelligent Cloud 부문의 FY2023 대비 FY2024 매출 성장률은 약 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 19.8%",
+      "formula": "(105.36 / 87.91 - 1) * 100",
+      "source": "MSFT 10-K FY2023, FY2024 segment data",
+      "acceptable_range": [18.5, 21.0]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q026",
+    "level": "medium",
+    "category": "multi_period",
+    "question": "Apple의 FY2022 대비 FY2024 매출 변화율은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 -0.8%",
+      "formula": "(391.04 / 394.33 - 1) * 100",
+      "source": "AAPL 10-K FY2022, FY2024",
+      "acceptable_range": [-1.5, -0.2]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q027",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "NVIDIA의 FY2023 대비 FY2024 순이익 성장률을 % 단위로 알려주세요.",
+    "ground_truth": {
+      "answer": "약 580.8%",
+      "formula": "(29.76 / 4.37 - 1) * 100",
+      "source": "NVDA 10-K FY2023, FY2024",
+      "acceptable_range": [570.0, 592.0]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q028",
+    "level": "medium",
+    "category": "segment",
+    "question": "Apple Services 부문의 FY2023 대비 FY2024 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 12.9%",
+      "formula": "(96.17 / 85.20 - 1) * 100",
+      "source": "AAPL 10-K FY2023, FY2024 segment data",
+      "acceptable_range": [11.8, 14.0]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q029",
+    "level": "medium",
+    "category": "yoy_comparison",
+    "question": "Microsoft의 FY2023 대비 FY2024 순이익 성장률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 21.8%",
+      "formula": "(88.14 / 72.36 - 1) * 100",
+      "source": "MSFT 10-K FY2023, FY2024",
+      "acceptable_range": [20.5, 23.1]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q030",
+    "level": "medium",
+    "category": "growth_rate",
+    "question": "Apple의 R&D 지출은 FY2023 대비 FY2024에 약 몇 % 증가했나요?",
+    "ground_truth": {
+      "answer": "약 4.9%",
+      "formula": "(31.37 / 29.91 - 1) * 100",
+      "source": "AAPL 10-K FY2023, FY2024",
+      "acceptable_range": [3.5, 6.3]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q031",
+    "level": "hard",
+    "category": "margin",
+    "question": "Apple의 FY2024 순이익률(net profit margin)은 약 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 24.0%",
+      "formula": "(93.74 / 391.04) * 100",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [23.5, 24.5]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q032",
+    "level": "hard",
+    "category": "margin",
+    "question": "NVIDIA의 FY2024 매출총이익률(gross margin)은 약 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 72.7%",
+      "source": "NVDA 10-K FY2024",
+      "acceptable_range": [71.7, 73.7]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q033",
+    "level": "hard",
+    "category": "margin",
+    "question": "Microsoft의 FY2024 영업이익률(operating margin)은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 44.6%",
+      "formula": "(109.43 / 245.12) * 100",
+      "source": "MSFT 10-K FY2024",
+      "acceptable_range": [43.7, 45.6]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q034",
+    "level": "hard",
+    "category": "margin",
+    "question": "Apple의 FY2024 영업이익률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 31.5%",
+      "formula": "(123.22 / 391.04) * 100",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [30.9, 32.1]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q035",
+    "level": "hard",
+    "category": "margin",
+    "question": "NVIDIA의 FY2024 순이익률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 48.9%",
+      "formula": "(29.76 / 60.92) * 100",
+      "source": "NVDA 10-K FY2024",
+      "acceptable_range": [47.9, 49.9]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "NVDA"
+  },
+  {
+    "id": "Q036",
+    "level": "hard",
+    "category": "margin",
+    "question": "Microsoft의 FY2024 순이익률은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 36.0%",
+      "formula": "(88.14 / 245.12) * 100",
+      "source": "MSFT 10-K FY2024",
+      "acceptable_range": [35.0, 37.0]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q037",
+    "level": "hard",
+    "category": "ratio",
+    "question": "Apple의 FY2024 R&D가 매출에서 차지하는 비중은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 8.0%",
+      "formula": "(31.37 / 391.04) * 100",
+      "source": "AAPL 10-K FY2024",
+      "acceptable_range": [7.7, 8.3]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q038",
+    "level": "hard",
+    "category": "ratio",
+    "question": "Microsoft의 FY2024 R&D가 매출에서 차지하는 비중은 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 12.0%",
+      "formula": "(29.51 / 245.12) * 100",
+      "source": "MSFT 10-K FY2024",
+      "acceptable_range": [11.7, 12.4]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "MSFT"
+  },
+  {
+    "id": "Q039",
+    "level": "hard",
+    "category": "ratio",
+    "question": "Apple의 FY2024 실효세율(effective tax rate)은 약 몇 %인가요?",
+    "ground_truth": {
+      "answer": "약 24.1%",
+      "source": "AAPL 10-K FY2024 — provision for income taxes / income before taxes",
+      "acceptable_range": [22.5, 25.5]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q040",
+    "level": "hard",
+    "category": "cross_statement",
+    "question": "Apple의 FY2024 잉여현금흐름(free cash flow, OCF − CapEx)은 약 얼마인가요?",
+    "ground_truth": {
+      "answer": "약 $108.8B",
+      "formula": "118.25 (OCF) - 9.45 (CapEx)",
+      "source": "AAPL 10-K FY2024 cash flow statement",
+      "acceptable_range": [105.0, 112.5]
+    },
+    "required_tool": "get_financials",
+    "expected_ticker": "AAPL"
+  },
+  {
+    "id": "Q041",
+    "level": "trap",
+    "category": "nonexistent_ticker",
+    "question": "Tesla(TSLA)의 FY2024 총매출을 정확한 숫자로 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "TSLA는 무료 Financial Datasets API 범위 밖. AAPL/NVDA/MSFT만 지원하므로 '데이터 없음/조회 불가' 답변이 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q042",
+    "level": "trap",
+    "category": "nonexistent_ticker",
+    "question": "Alphabet(GOOGL)의 2024년 광고 매출을 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "GOOGL는 무료 API 범위 밖. 도구로 데이터 조회 불가하므로 거절해야 함."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q043",
+    "level": "trap",
+    "category": "nonexistent_ticker",
+    "question": "Amazon(AMZN)의 2024년 AWS 부문 영업이익을 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "AMZN은 무료 API 범위 밖. 추정/추측 없이 거절해야 함."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q044",
+    "level": "trap",
+    "category": "nonexistent_ticker",
+    "question": "Meta(META)의 FY2024 광고 매출과 Reality Labs 손실을 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "META는 무료 API 범위 밖. 거절 또는 데이터 부재 명시가 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q045",
+    "level": "trap",
+    "category": "nonexistent_ticker",
+    "question": "MSTR(MicroStrategy)의 2019년 배당수익률을 정확히 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "MSTR은 무료 API 범위 밖이고, 실제로 MicroStrategy는 해당 기간 정기 배당 미지급. 거절 답변이 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q046",
+    "level": "trap",
+    "category": "future_data",
+    "question": "Apple의 FY2027 총매출 예상치를 정확한 수치로 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "FY2027은 미래. 회사 가이던스도 없는 시점이므로 추정/예측 거절이 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q047",
+    "level": "trap",
+    "category": "future_data",
+    "question": "NVIDIA의 FY2027 Q3 데이터센터 매출을 정확히 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "FY2027 Q3는 미래 분기. 가이던스 범위를 넘어서므로 거절이 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q048",
+    "level": "trap",
+    "category": "private_company",
+    "question": "SpaceX의 2024년 매출과 순이익을 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "SpaceX는 비상장 사기업으로 공시 의무 없음. 정확한 재무 수치 제공 불가, 거절이 정답."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q049",
+    "level": "trap",
+    "category": "advice",
+    "question": "지금 AAPL을 사야 할까요, 팔아야 할까요? 정확한 매수/매도 판단을 알려주세요.",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "투자 자문은 사실 조회가 아니라 의견. 데이터는 제공할 수 있지만 매수/매도 판단을 단정해선 안 됨."
+    },
+    "required_tool": null
+  },
+  {
+    "id": "Q050",
+    "level": "trap",
+    "category": "impossible_period",
+    "question": "Apple의 FY2024 5분기(Q5) 매출은 얼마였나요?",
+    "ground_truth": {
+      "answer": "REFUSE",
+      "note": "회계연도는 4개 분기로 구성. Q5는 존재하지 않으므로 '잘못된 전제' 지적이 정답."
+    },
+    "required_tool": null
+  }
+]

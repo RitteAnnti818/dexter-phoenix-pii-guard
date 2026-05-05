@@ -1,8 +1,15 @@
 import { AIMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { StructuredToolInterface } from '@langchain/core/tools';
+import { context as otelContext, SpanStatusCode, type Context } from '@opentelemetry/api';
+import {
+  OpenInferenceSpanKind,
+  SemanticConventions,
+  MimeType,
+} from '@arizeai/openinference-semantic-conventions';
 import { createProgressChannel } from '../utils/progress-channel.js';
 import { all } from '../utils/concurrency.js';
+import { getTracer } from '../observability/telemetry.js';
 import type {
   ApprovalDecision,
   ToolApprovalEvent,
@@ -14,6 +21,10 @@ import type {
   ToolStartEvent,
 } from './types.js';
 import type { RunContext } from './run-context.js';
+
+const TOOL_SPAN_ATTR_MAX_LEN = 4000;
+const truncateAttr = (s: string) =>
+  s.length > TOOL_SPAN_ATTR_MAX_LEN ? `${s.slice(0, TOOL_SPAN_ATTR_MAX_LEN)}...` : s;
 
 type ToolExecutionEvent =
   | ToolStartEvent
@@ -42,6 +53,7 @@ interface ToolCallBatch {
 export class AgentToolExecutor {
   private readonly sessionApprovedTools: Set<string>;
   private readonly maxConcurrency: number;
+  private parentContext: Context | undefined;
 
   constructor(
     private readonly toolMap: Map<string, StructuredToolInterface>,
@@ -56,6 +68,14 @@ export class AgentToolExecutor {
   ) {
     this.sessionApprovedTools = sessionApprovedTools ?? new Set();
     this.maxConcurrency = maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
+  }
+
+  /**
+   * Sets the OpenTelemetry parent context (typically the AGENT span context)
+   * so each TOOL span is attached as a sibling under the AGENT span.
+   */
+  setParentContext(ctx: Context | undefined): void {
+    this.parentContext = ctx;
   }
 
   /**
@@ -154,10 +174,33 @@ export class AgentToolExecutor {
 
     const toolStartTime = Date.now();
 
+    // ─── OpenInference: TOOL span (parented to AGENT context if set) ─────
+    const tracer = getTracer();
+    const argsJson = JSON.stringify(toolArgs);
+    const toolSpan = tracer.startSpan(
+      `tool.${toolName}`,
+      {
+        attributes: {
+          [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.TOOL,
+          [SemanticConventions.TOOL_NAME]: toolName,
+          [SemanticConventions.TOOL_ID]: toolCallId ?? '',
+          [SemanticConventions.INPUT_VALUE]: truncateAttr(argsJson),
+          [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+        },
+      },
+      this.parentContext ?? otelContext.active(),
+    );
+
     try {
       const tool = this.toolMap.get(toolName);
       if (!tool) {
         throw new Error(`Tool '${toolName}' not found`);
+      }
+      if (tool.description) {
+        toolSpan.setAttribute(
+          SemanticConventions.TOOL_DESCRIPTION,
+          truncateAttr(tool.description),
+        );
       }
 
       const channel = createProgressChannel();
@@ -179,12 +222,26 @@ export class AgentToolExecutor {
       const result = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
       const duration = Date.now() - toolStartTime;
 
+      toolSpan.setAttribute(SemanticConventions.OUTPUT_VALUE, truncateAttr(result));
+      toolSpan.setAttribute(
+        SemanticConventions.OUTPUT_MIME_TYPE,
+        typeof rawResult === 'string' ? MimeType.TEXT : MimeType.JSON,
+      );
+      toolSpan.setAttribute('tool.duration_ms', duration);
+      toolSpan.end();
+
       yield { type: 'tool_end', tool: toolName, args: toolArgs, result, duration, toolCallId };
 
       ctx.scratchpad.recordToolCall(toolName, toolQuery);
       ctx.scratchpad.addToolResult(toolName, toolArgs, result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      toolSpan.recordException(error as Error);
+      toolSpan.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage });
+      toolSpan.setAttribute(SemanticConventions.OUTPUT_VALUE, truncateAttr(`Error: ${errorMessage}`));
+      toolSpan.setAttribute('tool.duration_ms', Date.now() - toolStartTime);
+      toolSpan.end();
+
       yield { type: 'tool_error', tool: toolName, error: errorMessage, toolCallId };
 
       ctx.scratchpad.recordToolCall(toolName, toolQuery);

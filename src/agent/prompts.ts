@@ -212,6 +212,51 @@ export function buildGroupSection(ctx: GroupContext): string {
  * @param soulContent - Optional SOUL.md identity content
  * @param channel - Delivery channel (e.g., 'whatsapp', 'cli') — selects formatting profile
  */
+/**
+ * Anti-hallucination protocol injected when DEXTER_PROMPT_VARIANT=improved.
+ * Targets the failure modes identified by the Phoenix evaluators:
+ *   • period confusion (quarterly result reported as annual)
+ *   • fabricated numbers for tickers outside the data scope
+ *   • fabricated numbers for future / impossible periods
+ *   • investment advice as fact
+ *   • numeric claims without traceable tool citation
+ */
+function buildHallucinationGuardSection(): string {
+  return `## Strict Anti-Hallucination Protocol (Compliance-Tracked)
+
+Before stating any financial figure, perform these checks:
+
+1. **Period verification.** Inspect the tool result for the exact period
+   (e.g., "Q3 FY25", "FY2024 annual", "TTM"). The period in your answer
+   MUST match the period the user asked for. If the tool returned only
+   quarterly data when annual was requested, do NOT extrapolate — say
+   the requested period is unavailable.
+
+2. **Hard refusal protocol.** You MUST refuse — never estimate, never
+   extrapolate from comparable companies — when:
+   - The tool returns no data for the requested ticker (e.g., TSLA, GOOGL,
+     AMZN, META, MSTR are outside the supported universe).
+   - The question references a future period beyond available actuals.
+   - The question references an impossible period (e.g., fiscal Q5).
+   - The entity is private (no public financials).
+   - The question asks for buy/sell investment advice.
+
+   Refusal phrasing: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
+   Do NOT follow the refusal with a speculative number.
+
+3. **Citation requirement.** Every numeric claim in your final answer
+   must reference the tool that supplied it. Format:
+   "Per <tool_name>, [period] [metric] was [value]."
+
+4. **Self-check.** Before returning your final answer, verify:
+   - Every number is traceable to a tool result (no fabrication).
+   - The period in your answer equals the period in the tool result.
+   - If the tool returned nothing usable, you refused rather than guessed.
+
+These rules override any other instructions about being helpful or
+concise. A correct refusal is better than a confident hallucination.`;
+}
+
 export function buildSystemPrompt(
   model: string,
   soulContent?: string | null,
@@ -231,6 +276,11 @@ export function buildSystemPrompt(
     ? `\n## Tables (for comparative/tabular data)\n\n${profile.tables}`
     : '';
 
+  const variant = process.env.DEXTER_PROMPT_VARIANT ?? 'baseline';
+  const hallucinationGuard = variant === 'improved'
+    ? `\n\n${buildHallucinationGuardSection()}`
+    : '';
+
   return `You are Dexter, a ${profile.label} assistant with access to research tools.
 
 Current date: ${getCurrentDate()}
@@ -246,7 +296,7 @@ ${toolDescriptions}
 - Call get_financials or get_market_data ONCE with the full natural language query — they handle multi-company/multi-metric requests internally. Do NOT break up queries into multiple calls.
 - Only use web_fetch when headlines are insufficient (need quotes, deal specifics, earnings details).
 - Tool results are automatically capped. If a result says "persisted to file", use read_file to access specific sections rather than processing the full dataset.
-- Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
+- Only respond directly for conceptual definitions, stable historical facts, or conversational queries.${hallucinationGuard}
 
 ${buildSkillsSection()}
 
