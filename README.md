@@ -1,180 +1,267 @@
-# Dexter 🤖
+# Dexter × Phoenix — AI Observability + PII Guard
 
-Dexter is an autonomous financial research agent that thinks, plans, and learns as it works. It performs analysis using task planning, self-reflection, and real-time market data. Think Claude Code, but built specifically for financial research.
+> 오픈소스 금융 리서치 에이전트 [Dexter](https://github.com/virattt/dexter)에 **엔터프라이즈급 AI Observability**와 **한국어 PII 3-Stage Guard**를 붙인 모듈입니다.
 
-<img width="665" height="452" alt="Screenshot 2026-04-02 at 4 16 57 PM" src="https://github.com/user-attachments/assets/02418111-5f48-4a66-be5d-dc9bf9806284" />
+[![Stack](https://img.shields.io/badge/stack-TypeScript%20%2B%20Bun-blue)]()
+[![Phoenix](https://img.shields.io/badge/Phoenix-trace%20%26%20eval-purple)]()
+[![Status](https://img.shields.io/badge/Week_1-Hallucination_55%2F55-green)]()
+[![Status](https://img.shields.io/badge/Week_2-PII_Guard_P%2FR%2FF1=1.000-green)]()
 
-## Table of Contents
+---
 
-- [👋 Overview](#-overview)
-- [✅ Prerequisites](#-prerequisites)
-- [💻 How to Install](#-how-to-install)
-- [🚀 How to Run](#-how-to-run)
-- [📊 How to Evaluate](#-how-to-evaluate)
-- [🐛 How to Debug](#-how-to-debug)
-- [📱 How to Use with WhatsApp](#-how-to-use-with-whatsapp)
-- [🤝 How to Contribute](#-how-to-contribute)
-- [📄 License](#-license)
+## TL;DR
 
+| Week | 목표 | 결과 |
+|------|------|------|
+| **Week 1** | LLM agent의 환각률을 정량 측정 | 50문항 평가 + 5종 Evaluator + A/B 실험 → trade-off 정량 발견 |
+| **Week 2** | 한국어 PII 자동 탐지·마스킹 | 100건 데이터셋 P/R/F1 = **1.000** + Output Guard 15/15 차단 |
 
-## 👋 Overview
+---
 
-Dexter takes complex financial questions and turns them into clear, step-by-step research plans. It runs those tasks using live market data, checks its own work, and refines the results until it has a confident, data-backed answer.  
+## Quick Start
 
-**Key Capabilities:**
-- **Intelligent Task Planning**: Automatically decomposes complex queries into structured research steps
-- **Autonomous Execution**: Selects and executes the right tools to gather financial data
-- **Self-Validation**: Checks its own work and iterates until tasks are complete
-- **Real-Time Financial Data**: Access to income statements, balance sheets, and cash flow statements
-- **Safety Features**: Built-in loop detection and step limits to prevent runaway execution
+### 사전 요구사항
+- Bun ≥ 1.0
+- Docker (Phoenix 로컬 실행)
+- OpenAI API Key + Financial Datasets API Key
 
-[![Twitter Follow](https://img.shields.io/twitter/follow/virattt?style=social)](https://twitter.com/virattt) [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=social&logo=discord)](https://discord.gg/jpGHv2XB6T)
+### 5분 셋업
 
-<img width="1042" height="638" alt="Screenshot 2026-02-18 at 12 21 25 PM" src="https://github.com/user-attachments/assets/2a6334f9-863f-4bd2-a56f-923e42f4711e" />
-
-
-## ✅ Prerequisites
-
-- [Bun](https://bun.com) runtime (v1.0 or higher)
-- OpenAI API key (get [here](https://platform.openai.com/api-keys))
-- Financial Datasets API key (get [here](https://financialdatasets.ai))
-- Exa API key (get [here](https://exa.ai)) - optional, for web search
-
-#### Installing Bun
-
-If you don't have Bun installed, you can install it using curl:
-
-**macOS/Linux:**
 ```bash
-curl -fsSL https://bun.com/install | bash
-```
+# 1. Phoenix Docker
+docker run -d -p 6006:6006 -p 4317:4317 arizephoenix/phoenix:latest
 
-**Windows:**
-```bash
-powershell -c "irm bun.sh/install.ps1|iex"
-```
-
-After installation, restart your terminal and verify Bun is installed:
-```bash
-bun --version
-```
-
-## 💻 How to Install
-
-1. Clone the repository:
-```bash
-git clone https://github.com/virattt/dexter.git
-cd dexter
-```
-
-2. Install dependencies with Bun:
-```bash
+# 2. 의존성 설치
 bun install
-```
 
-3. Set up your environment variables:
-```bash
-# Copy the example environment file
+# 3. 환경변수
 cp env.example .env
+# OPENAI_API_KEY=...
+# FINANCIAL_DATASETS_API_KEY=...
 
-# Edit .env and add your API keys (if using cloud providers)
-# OPENAI_API_KEY=your-openai-api-key
-# ANTHROPIC_API_KEY=your-anthropic-api-key (optional)
-# GOOGLE_API_KEY=your-google-api-key (optional)
-# XAI_API_KEY=your-xai-api-key (optional)
-# OPENROUTER_API_KEY=your-openrouter-api-key (optional)
+# 4. Phoenix 연결 검증
+bun run scripts/phoenix-smoketest.ts
 
-# Institutional-grade market data for agents
-# FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
-
-# (Optional) If using Ollama locally
-# OLLAMA_BASE_URL=http://127.0.0.1:11434
-
-# Web Search (Exa preferred, Tavily fallback)
-# EXASEARCH_API_KEY=your-exa-api-key
-# TAVILY_API_KEY=your-tavily-api-key
-```
-
-## 🚀 How to Run
-
-Run Dexter in interactive mode:
-```bash
+# 5. Dexter 실행
 bun start
 ```
 
-Or with watch mode for development:
+→ http://localhost:6006 → `dexter` 프로젝트에서 trace 확인.
+
+---
+
+## 핵심 기능
+
+### 🔍 Week 1 — Hallucination 측정 파이프라인
+
+```
+사용자 질의
+   │
+   ▼
+Dexter Agent ───► AGENT > CHAIN > LLM > TOOL span tree (Phoenix UI)
+   │
+   └─► 답변 ───► 5종 Evaluator ───► 점수 + JSONL
+                  ├─ Factual Accuracy   (수치 정확도)
+                  ├─ Groundedness       (tool 출처 일치)
+                  ├─ Tool Correctness   (도구 선택 정확)
+                  ├─ Refusal            (모르면 거절)
+                  └─ Plan Quality       (reasoning 품질)
+```
+
+
+### 🛡️ Week 2 — PII 3-Stage Guard
+
+```
+사용자 입력
+   │
+   ▼
+Stage 1 — Regex      (deterministic, ~1ms)
+   │ 5종 정규식 + Luhn + context keyword scoring
+   ▼ 미감지 + 난독화 hint 발견
+Stage 2 — LLM Guard  (gpt-4o-mini, ~2s, 17% 입력만 도달)
+   │ 한글 수사 / 역순 / 맥락 추론 (DEMOGRAPHIC)
+   ▼ 마스킹된 입력
+Dexter Agent
+   │
+   ▼ 응답
+Output Guard         (memory_seed PII 차단)
+   │
+   ▼ trace
+Stage 3 Span Processor (Phoenix 송출 직전 last line of defense)
+   │
+   ▼
+[사용자에게 전달]
+```
+
+
+---
+
+## 측정 결과
+
+### Week 1 — Hallucination A/B 실험 (gpt-4o-mini, 50문항)
+
+| Metric | Baseline | + Anti-Hallucination | Δ |
+|---|---|---|---|
+| **Trap Refusal Rate** | 60% | **100%** | **+40pp** |
+| Factual Accuracy | 0.20 | 0.05 | -15pp |
+| Groundedness | 0.47 | 0.04 | -43pp |
+| Tool Correctness | 0.90 | 0.93 | +3pp |
+
+→ 환각 방지 프롬프트가 trap을 100% 거절하지만 정상 질문도 거절하는 over-correction trade-off를 정량 발견.
+
+### Week 2 — PII Guard 100건 평가
+
+| Metric | 결과 | PDF 목표 |
+|---|---|---|
+| **Precision** | **1.000** | ≥ 0.90 ✓ |
+| **Recall** | **1.000** | ≥ 0.85 ✓ |
+| **F1** | **1.000** | ≥ 0.87 ✓ |
+| Obfuscated Recall | **1.000** | ≥ 0.70 ✓ |
+| Output Guard cross-session | **15/15 차단** | 100% |
+| Latency mean | 477ms | (LLM-bound) |
+| Latency p50 | 0ms | (83% 입력 즉시 처리) |
+
+```
+Category         n   TP  PART  FN  FP  TN
+clean            40   0     0   0   0  40    ← 13개 trap 모두 회피
+direct           25  25     0   0   0   0
+obfuscated       20  20     0   0   0   0    ← 5패턴 × 4건 모두 catch
+cross_session    10   0     0   0   0  10
+prompt_injection  5   0     0   0   0   5
+```
+
+---
+
+## 사용법
+
+### 인터랙티브 (TUI)
 ```bash
-bun dev
+bun start                              # Dexter 실행 + Phoenix trace 자동 누적
 ```
 
-## 📊 How to Evaluate
-
-Dexter includes an evaluation suite that tests the agent against a dataset of financial questions. Evals use LangSmith for tracking and an LLM-as-judge approach for scoring correctness.
-
-**Run on all questions:**
+### Week 1 — Hallucination 평가
 ```bash
-bun run src/evals/run.ts
+bun run scripts/run-evals.ts                          # 50문항 전체
+bun run scripts/run-evals.ts --limit 5                # 빠른 smoke
+bun run scripts/run-evals.ts --level trap             # trap만
+DEXTER_PROMPT_VARIANT=improved bun run scripts/run-evals.ts  # A/B
+bun run scripts/compare-evals.ts <baseline> <improved>       # 비교 리포트
 ```
 
-**Run on a random sample of data:**
+### Week 2 — PII Guard
 ```bash
-bun run src/evals/run.ts --sample 10
+# Sanity check
+bun run scripts/check-stage1.ts                       # Stage 1 단독 (deterministic)
+bun run scripts/check-stage2.ts                       # Stage 1+2 통합
+bun run scripts/check-stage2.ts --obf                 # obfuscated 20건만
+bun run scripts/check-output-guard.ts                 # Output Guard 7-case
+
+# 전체 평가 (Phoenix trace 생성 포함)
+bun run scripts/run-pii-evals.ts                      # 100건 → JSONL + trace
+bun run scripts/run-pii-evals.ts --category obfuscated  # 카테고리 부분 평가
+
+# Week 1 평가 시 PII Guard 우회 (12자리 매출 숫자 오탐 방지)
+PII_GUARD_DISABLED=1 bun run scripts/run-evals.ts
 ```
 
-The eval runner displays a real-time UI showing progress, current question, and running accuracy statistics. Results are logged to LangSmith for analysis.
+### 자체 Dashboard (실시간 시각화)
 
-## 🐛 How to Debug
+Phoenix UI는 trace viewer 위주라 차트가 부족. 자체 정적 dashboard를 3가지 모드로 제공:
 
-Dexter logs all tool calls to a scratchpad file for debugging and history tracking. Each query creates a new JSONL file in `.dexter/scratchpad/`.
-
-**Scratchpad location:**
-```
-.dexter/scratchpad/
-├── 2026-01-30-111400_9a8f10723f79.jsonl
-├── 2026-01-30-143022_a1b2c3d4e5f6.jsonl
-└── ...
-```
-
-Each file contains newline-delimited JSON entries tracking:
-- **init**: The original query
-- **tool_result**: Each tool call with arguments, raw result, and LLM summary
-- **thinking**: Agent reasoning steps
-
-**Example scratchpad entry:**
-```json
-{"type":"tool_result","timestamp":"2026-01-30T11:14:05.123Z","toolName":"get_income_statements","args":{"ticker":"AAPL","period":"annual","limit":5},"result":{...},"llmSummary":"Retrieved 5 years of Apple annual income statements showing revenue growth from $274B to $394B"}
-```
-
-This makes it easy to inspect exactly what data the agent gathered and how it interpreted results.
-
-## 📱 How to Use with WhatsApp
-
-Chat with Dexter through WhatsApp by linking your phone to the gateway. Messages you send to yourself are processed by Dexter and responses are sent back to the same chat.
-
-**Quick start:**
 ```bash
-# Link your WhatsApp account (scan QR code)
-bun run gateway:login
+# 1. Static (단일 HTML 파일, 발표 첨부용)
+bun run scripts/build-dashboard.ts
+open .dexter/pii-evals/dashboard.html
 
-# Start the gateway
-bun run gateway
+# 2. Watch (JSONL 변경 시 자동 재빌드)
+bun run scripts/build-dashboard.ts --watch
+
+# 3. Serve (localhost 서버, 평가 진행 중 실시간 확인)
+bun run scripts/build-dashboard.ts --serve            # http://localhost:7777
+bun run scripts/build-dashboard.ts --serve --port 8080
 ```
 
-Then open WhatsApp, go to your own chat (message yourself), and ask Dexter a question.
+**Serve 모드 특징:**
+- Sticky nav (Overview / Charts / Detail) + 다크/라이트 테마 토글
+- KPI 카드 5종 + Chart.js 차트 6종 (Outcome / Category / Obfuscation / PII Type / Latency / Output Guard)
+- 검색 + 카테고리/outcome 필터 + 실시간 행 카운트
+- 2초 polling으로 새 row 감지 → 자동 reload (필터/테마 상태 보존)
+- `phoenix-demo` 디자인 영감 (Inter + Noto Sans KR + JetBrains Mono)
 
-For detailed setup instructions, configuration options, and troubleshooting, see the [WhatsApp Gateway README](src/gateway/channels/whatsapp/README.md).
+→ 다른 터미널에서 `run-pii-evals.ts` 실행하면 dashboard가 실시간으로 반영.
 
-## 🤝 How to Contribute
+---
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+## 환경변수
 
-**Important**: Please keep your pull requests small and focused.  This will make it easier to review and merge.
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006/v1/traces` | OTLP HTTP 수신 주소 |
+| `PHOENIX_API_KEY` | (없음) | Phoenix Cloud 인증 |
+| `PHOENIX_PROJECT_NAME` | `dexter` | Phoenix UI 프로젝트 |
+| `PHOENIX_DISABLED` | (꺼짐) | `1`이면 telemetry 차단 |
+| `PHOENIX_DEBUG` | (꺼짐) | `1`이면 OTel diag 로그 verbose |
+| `DEXTER_PROMPT_VARIANT` | `baseline` | `improved`로 환각 방지 프롬프트 |
+| `DEXTER_EVAL_MODEL` | `gpt-4o-mini` | 평가 시 agent 모델 |
+| `EVAL_JUDGE_MODEL` | `gpt-4o-mini` | LLM-Judge 모델 |
+| `PII_GUARD_DISABLED` | (꺼짐) | `1`이면 Span Processor redaction 우회 |
+| `PII_GUARD_MODEL` | `gpt-4o-mini` | Stage 2 LLM Guard 모델 |
 
+---
 
-## 📄 License
+## 프로젝트 구조
 
-This project is licensed under the MIT License.
+```
+.
+├── src/
+│   ├── index.tsx                          # entry — telemetry init이 LangChain 임포트보다 먼저
+│   ├── agent/
+│   │   ├── agent.ts                       # AGENT/CHAIN/LLM span 주입
+│   │   ├── tool-executor.ts               # TOOL span 주입
+│   │   └── prompts.ts                     # DEXTER_PROMPT_VARIANT 스위치 + 환각방지 프롬프트
+│   └── observability/
+│       ├── telemetry.ts                   # Phoenix OTLP exporter + PIIRedactingSpanProcessor wrap
+│       ├── spanProcessors.ts              # Stage 3 — Proxy 기반 PII redaction
+│       ├── evaluators/                    # Week 1 — 5종 Evaluator
+│       │   ├── types.ts                   # EvalResult / AgentRunCapture / DatasetRow
+│       │   ├── judge.ts                   # LLM-as-Judge 헬퍼 (JSON mode, temp=0)
+│       │   ├── hallucination.ts           # Factual Accuracy + Groundedness
+│       │   ├── toolCorrectness.ts         # 도구 선택 + ticker 매칭
+│       │   ├── refusal.ts                 # 트랩 거절 적절성
+│       │   └── planQuality.ts             # reasoning 품질
+│       ├── guards/                        # Week 2 — PII 3-Stage Guard
+│       │   ├── regexGuard.ts              # Stage 1 — 5종 정규식 + confidence
+│       │   ├── llmGuard.ts                # Stage 2 — LLM Guard + escalation gating
+│       │   └── outputGuard.ts             # Output Guard — cross-session leak 차단
+│       └── datasets/
+│           ├── hallucination_50q.json     # Week 1 — 50문항 (Easy/Medium/Hard/Trap)
+│           └── pii_100samples.json        # Week 2 — 100건 (5종 카테고리)
+│
+├── scripts/
+│   ├── phoenix-smoketest.ts               # Phoenix 연결 검증
+│   ├── run-evals.ts                       # Week 1 — 50문항 → 5 evaluator → JSONL
+│   ├── compare-evals.ts                   # Week 1 — baseline vs improved A/B
+│   ├── check-stage1.ts                    # Week 2 — Stage 1 sanity check
+│   ├── check-stage2.ts                    # Week 2 — Stage 1+2 통합 sanity check
+│   ├── check-output-guard.ts              # Week 2 — Output Guard 7-case 검증
+│   ├── run-pii-evals.ts                   # Week 2 — 100건 → Phoenix trace + JSONL
+│   └── build-dashboard.ts                 # Week 2 — Static / Watch / Serve dashboard 빌더
+│
+├── env.example                            # PHOENIX_*, DEXTER_*, PII_GUARD_* 템플릿
+```
+
+---
+
+## 참고 자료
+
+- [Arize Phoenix Docs](https://arize.com/docs/phoenix)
+- [Arize Mask & Redact](https://arize.com/docs/ax/instrument/mask-and-redact-data) — Week 2 기반 패턴
+- [OpenInference 시맨틱 컨벤션](https://github.com/Arize-ai/openinference)
+- [Dexter 원본 저장소](https://github.com/virattt/dexter)
+- [Microsoft Presidio](https://microsoft.github.io/presidio/) — 보너스 NLP-기반 PII 탐지
+
+---
+
+## 라이선스 및 배경
+
+전북대 6-7주차 AI Observability 실습 과제 (2026년 4월) 산출물입니다. 원본 Dexter 라이선스를 따르며, 본 모듈은 `feat/phoenix-observability` 브랜치에 추가 구현되어 있습니다.
