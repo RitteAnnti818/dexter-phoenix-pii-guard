@@ -52,9 +52,22 @@ yarn-error.log*
 # Cursor files
 .cursor/
 
-# Dexter context files (offloaded tool outputs)
-.dexter/*
+# Dexter — exclude personal/runtime data, KEEP evaluation results as evidence
+.dexter/scratchpad/
+.dexter/memory/
+.dexter/messages/
+.dexter/tool-results/
+.dexter/cache/
+# (.dexter/evals/ and .dexter/pii-evals/ are kept as Week 1/2 evaluation evidence)
 
+# Process-only documentation (not for public repo)
+note.md
+note2.md
+week2-plan.md
+week2-progress.md
+
+# Claude Code settings (machine-specific)
+.claude/
 
 logs/
 coverage.json

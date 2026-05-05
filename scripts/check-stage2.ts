@@ -1,0 +1,195 @@
+#!/usr/bin/env bun
+/**
+ * Sanity check — runs Stage 1 (regex) + Stage 2 (LLM) combined against the
+ * 100-sample PII dataset and reports per-category / per-pattern coverage.
+ *
+ * Usage:
+ *   bun run scripts/check-stage2.ts                  # full 100 rows
+ *   bun run scripts/check-stage2.ts --limit 20       # first 20
+ *   bun run scripts/check-stage2.ts --ids P066,P081  # specific rows
+ *   bun run scripts/check-stage2.ts --obf            # obfuscated rows only
+ *
+ * Cost: ~$0.01 for 100 rows on gpt-4o-mini (one call per row).
+ * Latency: ~50s sequential.
+ */
+
+import 'dotenv/config';
+
+import {
+  regexDetect,
+  maskText,
+  dedupeOverlapping,
+  type PIIDetection,
+} from '../src/observability/guards/regexGuard.js';
+import { llmDetect } from '../src/observability/guards/llmGuard.js';
+
+interface Row {
+  id: string;
+  category: 'clean' | 'direct' | 'obfuscated' | 'cross_session' | 'prompt_injection';
+  input: string;
+  contains_pii: boolean;
+  pii_types: string[];
+  expected_masked: string;
+  obfuscation_pattern?: string;
+  requires_stage?: 1 | 2;
+}
+
+interface CliArgs {
+  limit?: number;
+  ids?: string[];
+  obfOnly?: boolean;
+}
+
+function parseArgs(argv: string[]): CliArgs {
+  const out: CliArgs = {};
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--limit') out.limit = Number.parseInt(argv[++i] ?? '', 10);
+    else if (a === '--ids') out.ids = (argv[++i] ?? '').split(',').filter(Boolean);
+    else if (a === '--obf') out.obfOnly = true;
+  }
+  return out;
+}
+
+function selectRows(all: Row[], args: CliArgs): Row[] {
+  let rows = all;
+  if (args.ids && args.ids.length > 0) {
+    const set = new Set(args.ids);
+    rows = rows.filter((r) => set.has(r.id));
+  }
+  if (args.obfOnly) rows = rows.filter((r) => r.category === 'obfuscated');
+  if (args.limit && Number.isFinite(args.limit)) rows = rows.slice(0, args.limit);
+  return rows;
+}
+
+interface Result {
+  row: Row;
+  stage1: PIIDetection[];
+  stage2: PIIDetection[];
+  combined: PIIDetection[];
+  actualMasked: string;
+  detected: boolean;
+  maskCorrect: boolean;
+  outcome: 'TP' | 'FP' | 'FN' | 'TN' | 'PARTIAL';
+  latencyMs: number;
+}
+
+const args = parseArgs(process.argv);
+const allRows = JSON.parse(
+  await Bun.file('src/observability/datasets/pii_100samples.json').text(),
+) as Row[];
+const rows = selectRows(allRows, args);
+
+console.error(`[check-stage2] running ${rows.length}/${allRows.length} rows...`);
+
+const results: Result[] = [];
+for (let i = 0; i < rows.length; i++) {
+  const row = rows[i];
+  process.stderr.write(`[${i + 1}/${rows.length}] ${row.id} (${row.category})... `);
+
+  const t0 = Date.now();
+  const stage1 = regexDetect(row.input);
+  const stage2 = await llmDetect(row.input, { stage1Detections: stage1 });
+  const combined = dedupeOverlapping([...stage1, ...stage2]);
+  const actualMasked = maskText(row.input, combined);
+  const latencyMs = Date.now() - t0;
+
+  const detected = combined.length > 0;
+  const maskCorrect = actualMasked === row.expected_masked;
+
+  let outcome: Result['outcome'];
+  if (row.contains_pii && detected && maskCorrect) outcome = 'TP';
+  else if (row.contains_pii && detected && !maskCorrect) outcome = 'PARTIAL';
+  else if (row.contains_pii && !detected) outcome = 'FN';
+  else if (!row.contains_pii && detected) outcome = 'FP';
+  else outcome = 'TN';
+
+  results.push({ row, stage1, stage2, combined, actualMasked, detected, maskCorrect, outcome, latencyMs });
+  process.stderr.write(`${outcome} (${latencyMs}ms, s1=${stage1.length} s2=${stage2.length})\n`);
+}
+
+// ---- Summary ----------------------------------------------------------------
+
+const counts = { TP: 0, FP: 0, FN: 0, TN: 0, PARTIAL: 0 };
+for (const r of results) counts[r.outcome]++;
+
+const tp = counts.TP + counts.PARTIAL;
+const precision = tp / (tp + counts.FP) || 0;
+const recall = tp / (tp + counts.FN) || 0;
+const f1 = (2 * precision * recall) / (precision + recall) || 0;
+
+const latencies = results.map((r) => r.latencyMs).sort((a, b) => a - b);
+const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
+const p50 = latencies[Math.floor(latencies.length * 0.5)] ?? 0;
+
+console.log('\n─── Stage 1+2 Combined Sanity Report ──────────────────────────────');
+console.log(`Total rows:    ${rows.length}`);
+console.log(`TP (caught):   ${counts.TP}     PARTIAL (caught but mask off): ${counts.PARTIAL}`);
+console.log(`FP (false +):  ${counts.FP}     FN (missed):                   ${counts.FN}`);
+console.log(`TN (correctly ignored): ${counts.TN}`);
+console.log(`Precision: ${precision.toFixed(3)}   Recall: ${recall.toFixed(3)}   F1: ${f1.toFixed(3)}`);
+console.log(`Latency: median=${p50}ms  p95=${p95}ms`);
+
+// ---- Per-category breakdown ------------------------------------------------
+
+const categories = ['clean', 'direct', 'obfuscated', 'cross_session', 'prompt_injection'] as const;
+console.log('\nCategory         n   TP   PART  FN   FP   TN');
+for (const cat of categories) {
+  const subset = results.filter((r) => r.row.category === cat);
+  if (subset.length === 0) continue;
+  const c = { TP: 0, FP: 0, FN: 0, TN: 0, PARTIAL: 0 };
+  for (const r of subset) c[r.outcome]++;
+  console.log(
+    `${cat.padEnd(16)} ${String(subset.length).padStart(2)}  ${String(c.TP).padStart(3)}  ${String(c.PARTIAL).padStart(4)}  ${String(c.FN).padStart(3)}  ${String(c.FP).padStart(3)}  ${String(c.TN).padStart(3)}`,
+  );
+}
+
+// ---- Per-obfuscation pattern -----------------------------------------------
+
+const obfRows = results.filter((r) => r.row.category === 'obfuscated');
+if (obfRows.length > 0) {
+  const obfPatterns = ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
+  console.log('\nObfuscation pattern        n   stage   TP/PART  FN  PARTIAL detail');
+  for (const pat of obfPatterns) {
+    const subset = obfRows.filter((r) => r.row.obfuscation_pattern === pat);
+    if (subset.length === 0) continue;
+    const stage = subset[0].row.requires_stage;
+    const tpPart = subset.filter((r) => r.outcome === 'TP' || r.outcome === 'PARTIAL').length;
+    const fn = subset.filter((r) => r.outcome === 'FN').length;
+    const part = subset.filter((r) => r.outcome === 'PARTIAL').length;
+    console.log(
+      `${pat.padEnd(26)} ${String(subset.length).padStart(2)}  stage ${stage}  ${String(tpPart).padStart(7)}  ${String(fn).padStart(2)}  ${part > 0 ? part : ''}`,
+    );
+  }
+}
+
+// ---- Stage 1 vs Stage 2 contribution ---------------------------------------
+
+const totalDetections = results.reduce((sum, r) => sum + r.combined.length, 0);
+const stage1Only = results.reduce((sum, r) => {
+  const stage2Spans = new Set(r.stage2.map((d) => `${d.start}:${d.end}`));
+  return sum + r.combined.filter((d) => !stage2Spans.has(`${d.start}:${d.end}`)).length;
+}, 0);
+const stage2Contrib = totalDetections - stage1Only;
+console.log(`\nDetection contribution:  Stage 1 = ${stage1Only}, Stage 2 added = ${stage2Contrib}, total = ${totalDetections}`);
+
+// ---- Failure detail --------------------------------------------------------
+
+const failures = results.filter((r) => r.outcome === 'FP' || r.outcome === 'PARTIAL' || r.outcome === 'FN');
+if (failures.length > 0) {
+  console.log(`\n─── Failures (${failures.length}) ───────────────────────────────────────`);
+  for (const f of failures.slice(0, 20)) {
+    console.log(`[${f.outcome}] ${f.row.id} (${f.row.category}${f.row.obfuscation_pattern ? '/' + f.row.obfuscation_pattern : ''})`);
+    console.log(`  input:    ${f.row.input}`);
+    console.log(`  expected: ${f.row.expected_masked}`);
+    console.log(`  actual:   ${f.actualMasked}`);
+    if (f.stage1.length > 0) {
+      console.log(`  stage1:   ${f.stage1.map((d) => `${d.type}=${JSON.stringify(d.match)} (${d.confidence.toFixed(2)})`).join(', ')}`);
+    }
+    if (f.stage2.length > 0) {
+      console.log(`  stage2:   ${f.stage2.map((d) => `${d.type}=${JSON.stringify(d.match)} (${d.confidence.toFixed(2)})`).join(', ')}`);
+    }
+    console.log('');
+  }
+  if (failures.length > 20) console.log(`... and ${failures.length - 20} more`);
+}
