@@ -1,0 +1,39 @@
+
+=== Task 1-4 A/B Report ===
+baseline file: .dexter/evals/2026-04-28T08-17-51-714Z.jsonl  (variant=baseline, n=50)
+improved file: .dexter/evals/2026-04-28T08-43-54-180Z.jsonl  (variant=improved, n=50)
+
+Metric                     baseline      improved      Δ
+----------------------------------------------------------------------
+Hallucination Rate (1-FA)  80.0%         95.0%         +15.0pp ↓
+Factual Accuracy (mean)    0.200         0.050         -15.0pp ↓
+Groundedness (mean)        0.470         0.040         -43.0pp ↓
+Tool Correctness (mean)    0.900         0.930         +3.0pp ↑
+Trap Refusal Rate          60.0%         100.0%        +40.0pp ↑
+Plan Quality (mean)        0.500         0.500         0.0pp →
+----------------------------------------------------------------------
+Agent Latency (mean, sec)  0.00          4.58          +4.58s
+Agent Latency (p95, sec)   0.00          10.87         +10.87s
+
+Per-row movement: 5 wins, 29 losses
+
+Regressions (improved scored worse than baseline):
+  Q001 factualAccuracy     1.00 → 0.00
+  Q001 groundedness        1.00 → 0.00
+  Q002 groundedness        0.50 → 0.00
+  Q003 groundedness        1.00 → 0.00
+  Q004 factualAccuracy     1.00 → 0.00
+  Q004 groundedness        1.00 → 0.00
+  Q005 factualAccuracy     1.00 → 0.00
+  Q005 groundedness        1.00 → 0.00
+  Q006 groundedness        1.00 → 0.00
+  Q007 groundedness        1.00 → 0.00
+  ... and 19 more
+
+Top wins:
+  Q045 refusal             0.00 → 1.00
+  Q047 refusal             0.00 → 1.00
+  Q050 refusal             0.00 → 1.00
+  Q043 refusal             0.50 → 1.00
+  Q049 refusal             0.50 → 1.00
+
