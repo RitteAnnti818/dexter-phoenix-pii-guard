@@ -111,7 +111,7 @@ Stage 3 Span Processor (Phoenix 송출 직전 last line of defense)
 
 ### Week 2 — PII Guard 100건 평가
 
-| Metric | 결과 | PDF 목표 |
+| Metric | 결과 | 목표 |
 |---|---|---|
 | **Precision** | **1.000** | ≥ 0.90 ✓ |
 | **Recall** | **1.000** | ≥ 0.85 ✓ |
@@ -169,26 +169,10 @@ PII_GUARD_DISABLED=1 bun run scripts/run-evals.ts
 Phoenix UI는 trace viewer 위주라 차트가 부족. 자체 정적 dashboard를 3가지 모드로 제공:
 
 ```bash
-# 1. Static (단일 HTML 파일, 발표 첨부용)
-bun run scripts/build-dashboard.ts
-open .dexter/pii-evals/dashboard.html
-
-# 2. Watch (JSONL 변경 시 자동 재빌드)
-bun run scripts/build-dashboard.ts --watch
-
-# 3. Serve (localhost 서버, 평가 진행 중 실시간 확인)
+# Serve (localhost 서버, 평가 진행 중 실시간 확인)
 bun run scripts/build-dashboard.ts --serve            # http://localhost:7777
 bun run scripts/build-dashboard.ts --serve --port 8080
 ```
-
-**Serve 모드 특징:**
-- Sticky nav (Overview / Charts / Detail) + 다크/라이트 테마 토글
-- KPI 카드 5종 + Chart.js 차트 6종 (Outcome / Category / Obfuscation / PII Type / Latency / Output Guard)
-- 검색 + 카테고리/outcome 필터 + 실시간 행 카운트
-- 2초 polling으로 새 row 감지 → 자동 reload (필터/테마 상태 보존)
-- `phoenix-demo` 디자인 영감 (Inter + Noto Sans KR + JetBrains Mono)
-
-→ 다른 터미널에서 `run-pii-evals.ts` 실행하면 dashboard가 실시간으로 반영.
 
 ---
 
