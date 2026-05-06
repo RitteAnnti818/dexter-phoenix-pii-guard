@@ -244,6 +244,10 @@ export interface DoneEvent {
   totalTime: number;
   tokenUsage?: TokenUsage;
   tokensPerSecond?: number;
+  /** OpenInference AGENT root span ID — used by evaluators to attach annotations. */
+  agentSpanId?: string;
+  /** OpenInference trace ID — useful for cross-referencing in Phoenix UI. */
+  traceId?: string;
 }
 
 /**
