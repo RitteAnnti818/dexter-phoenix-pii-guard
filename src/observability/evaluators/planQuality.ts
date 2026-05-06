@@ -7,27 +7,7 @@
 
 import type { AgentRunCapture, DatasetRow, EvalResult } from './types.js';
 import { judgeWithLlm } from './judge.js';
-
-const PLAN_SYSTEM_PROMPT = `You are evaluating the quality of an AI agent's task-planning step.
-
-Inputs you'll receive:
-- The user's question.
-- The agent's "plan": text it reasoned out before invoking tools.
-- The list of tools the agent actually called.
-
-Definition of a good plan:
-- Identifies the specific data needed (which company, period, statement).
-- Picks tools that can supply that data, OR explicitly notes the data is unavailable.
-- Doesn't over-engineer (no irrelevant tools), doesn't under-engineer (doesn't skip needed lookups).
-- For trap questions, a good plan recognizes the question is unanswerable BEFORE making tool calls.
-
-Score buckets:
-- 1.0 = "correct": plan is concise, on-target, and matches the tools used.
-- 0.5 = "partial": plan is mostly right but missed a step, or included an irrelevant tool, or rambled.
-- 0.0 = "incorrect": plan is empty, off-topic, or contradicts the tools that were actually called.
-
-Return JSON ONLY:
-{"score": <0.0-1.0>, "label": "correct"|"partial"|"incorrect", "reason": "<one sentence>"}`;
+import { PLAN_QUALITY_SYSTEM_PROMPT } from './prompts.js';
 
 export async function evaluatePlanQuality(
   row: DatasetRow,
@@ -56,7 +36,7 @@ ${planText.slice(0, 4000)}
 
 Tools actually called: ${toolList}`;
 
-  const verdict = await judgeWithLlm(PLAN_SYSTEM_PROMPT, userPrompt);
+  const verdict = await judgeWithLlm(PLAN_QUALITY_SYSTEM_PROMPT, userPrompt);
   return {
     score: verdict.score,
     label: verdict.label,
