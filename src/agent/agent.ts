@@ -183,6 +183,14 @@ export class Agent {
     const agentCtx = trace.setSpan(otelContext.active(), agentSpan);
     this.toolExecutor.setParentContext(agentCtx);
 
+    // Capture root span/trace IDs so evaluator scripts can attach Phoenix
+    // annotations to the AGENT span. Returns zero-IDs when telemetry is
+    // disabled — consumers must check before posting.
+    const sc = agentSpan.spanContext();
+    const isValidSpanId = sc.spanId && sc.spanId !== '0'.repeat(16);
+    const agentSpanId = isValidSpanId ? sc.spanId : undefined;
+    const traceId = isValidSpanId ? sc.traceId : undefined;
+
     let finalAnswerForSpan = '';
     let agentError: unknown = undefined;
 
@@ -273,6 +281,8 @@ export class Agent {
                 totalTime,
                 tokenUsage: ctx.tokenCounter.getUsage(),
                 tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+                agentSpanId,
+                traceId,
               };
               return;
             }
@@ -313,7 +323,7 @@ export class Agent {
         if (!hasToolCalls(response)) {
           const safeAnswer = await maskAgentOutput(responseText ?? '');
           finalAnswerForSpan = safeAnswer;
-          yield* this.handleDirectResponse(safeAnswer, ctx);
+          yield* this.handleDirectResponse(safeAnswer, ctx, { agentSpanId, traceId });
           return;
         }
 
@@ -352,6 +362,8 @@ export class Agent {
             totalTime,
             tokenUsage: ctx.tokenCounter.getUsage(),
             tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+            agentSpanId,
+            traceId,
           };
           return;
         }
@@ -385,6 +397,8 @@ export class Agent {
         totalTime,
         tokenUsage: ctx.tokenCounter.getUsage(),
         tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+        agentSpanId,
+        traceId,
       };
     } catch (err) {
       agentError = err;
@@ -583,6 +597,7 @@ export class Agent {
   private async *handleDirectResponse(
     responseText: string,
     ctx: RunContext,
+    spanIds?: { agentSpanId?: string; traceId?: string },
   ): AsyncGenerator<AgentEvent, void> {
     const totalTime = Date.now() - ctx.startTime;
     yield {
@@ -593,6 +608,8 @@ export class Agent {
       totalTime,
       tokenUsage: ctx.tokenCounter.getUsage(),
       tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+      agentSpanId: spanIds?.agentSpanId,
+      traceId: spanIds?.traceId,
     };
   }
 

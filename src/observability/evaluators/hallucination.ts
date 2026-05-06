@@ -14,6 +14,7 @@ import type {
   ToolCallCapture,
 } from './types.js';
 import { judgeWithLlm } from './judge.js';
+import { GROUNDEDNESS_SYSTEM_PROMPT } from './prompts.js';
 
 // Matches a number with optional thousands separators, decimals, and
 // magnitude suffixes (B/M/K/T or 억/조/만). Captures the raw token; the
@@ -102,21 +103,6 @@ function concatToolOutputs(toolCalls: ToolCallCapture[], maxChars = 8000): strin
   const joined = chunks.join('\n\n');
   return joined.length > maxChars ? `${joined.slice(0, maxChars)}\n...[truncated]` : joined;
 }
-
-const GROUNDEDNESS_SYSTEM_PROMPT = `You are evaluating whether a financial AI agent's answer is fully grounded in the data sources it actually retrieved.
-
-Definition of "grounded":
-- Every concrete claim in the answer (numbers, dates, segment breakdowns, growth rates) must be either present in the tool outputs OR be a straightforward arithmetic transformation of values present.
-- Hedging language ("approximately", "roughly") is fine if the underlying number is grounded.
-- Restating the question or generic context (industry knowledge, company description) is acceptable.
-
-Score buckets:
-- 1.0 = "correct": every concrete claim is supported by tool outputs.
-- 0.5 = "partial": at least one concrete claim is grounded, but at least one is missing or fabricated. Use this only when the answer is mostly right.
-- 0.0 = "incorrect": the answer's key claim has no support, or the agent never called any tool.
-
-Return JSON ONLY in this exact shape:
-{"score": <0.0-1.0>, "label": "correct"|"partial"|"incorrect", "reason": "<one sentence>"}`;
 
 /** Evaluator #2 — LLM-as-Judge: is every claim in the answer in the tool outputs? */
 export async function evaluateGroundedness(

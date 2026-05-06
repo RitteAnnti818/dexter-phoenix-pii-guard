@@ -7,8 +7,7 @@
 
 import { ChatOpenAI } from '@langchain/openai';
 import type { EvalLabel } from './types.js';
-
-const DEFAULT_JUDGE_MODEL = 'gpt-4o-mini';
+import { DEFAULT_JUDGE_MODEL } from './prompts.js';
 
 export interface JudgeVerdict {
   score: number;
