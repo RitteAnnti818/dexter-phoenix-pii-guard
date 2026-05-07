@@ -166,8 +166,6 @@ PII_GUARD_DISABLED=1 bun run scripts/run-evals.ts
 
 ### 자체 Dashboard (실시간 시각화)
 
-Phoenix UI는 trace viewer 위주라 차트가 부족. 자체 정적 dashboard를 3가지 모드로 제공:
-
 ```bash
 # Serve (localhost 서버, 평가 진행 중 실시간 확인)
 bun run scripts/build-dashboard.ts --serve            # http://localhost:7777
