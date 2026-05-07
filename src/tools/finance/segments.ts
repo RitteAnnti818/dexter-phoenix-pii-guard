@@ -30,9 +30,9 @@ export const getSegmentedRevenues = new DynamicStructuredTool({
       period: input.period,
       limit: input.limit,
     };
-    const { data, url } = await api.get('/financials/segmented-revenues/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await api.get('/financials/segments/', params, { cacheable: true, ttlMs: TTL_24H });
     return formatToolResult(
-      stripFieldsDeep(data.segmented_revenues || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data.segmented_financials || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },
