@@ -64,24 +64,20 @@ if (existing && !force) {
   skip(`Dataset "${DATASET_NAME}"`);
 } else {
   if (existing) {
-    db.exec(`DELETE FROM DatasetRow WHERE datasetId = '${DATASET_ID}'`);
-    db.exec(`DELETE FROM DatasetRun WHERE datasetId = '${DATASET_ID}'`);
-    db.exec(`DELETE FROM Dataset WHERE id = '${DATASET_ID}'`);
+    db.prepare('DELETE FROM DatasetRow WHERE datasetId = ?').run(DATASET_ID);
+    db.prepare('DELETE FROM DatasetRun WHERE datasetId = ?').run(DATASET_ID);
+    db.prepare('DELETE FROM Dataset WHERE id = ?').run(DATASET_ID);
     ok('Removed existing dataset (--force)');
   }
 
   const rows: any[] = JSON.parse(await Bun.file(DATASET_PATH).text());
 
-  // Flatten each row: ground_truth becomes a JSON string so IQHub can use it as {context}
   const headers = ['id', 'level', 'category', 'question', 'ground_truth', 'required_tool', 'expected_ticker'];
 
-  db.exec(`
+  db.prepare(`
     INSERT INTO Dataset (id, name, fileName, headers, queryCol, contextCol, evalNames, evalOverrides, rowCount, rows, createdAt, updatedAt)
-    VALUES ('${DATASET_ID}', '${DATASET_NAME}', 'hallucination_50q.json',
-            '${JSON.stringify(headers)}', 'question', 'ground_truth',
-            '${JSON.stringify(evalNames)}', '{}',
-            ${rows.length}, '[]', '${now}', '${now}')
-  `);
+    VALUES (?, ?, 'hallucination_50q.json', ?, 'question', 'ground_truth', ?, '{}', ?, '[]', ?, ?)
+  `).run(DATASET_ID, DATASET_NAME, JSON.stringify(headers), JSON.stringify(evalNames), rows.length, now, now);
 
   const insertRow = db.prepare(
     'INSERT INTO DatasetRow (id, datasetId, rowIndex, data) VALUES (?, ?, ?, ?)'
@@ -121,7 +117,7 @@ for (const ep of EVAL_PROMPTS) {
   }
 
   if (existingEval) {
-    db.exec(`DELETE FROM EvalPrompt WHERE id = '${existingEval.id}'`);
+    db.prepare('DELETE FROM EvalPrompt WHERE id = ?').run(existingEval.id);
   }
 
   db.prepare(`
@@ -148,7 +144,7 @@ if (existingTpl && !force) {
   skip(`AgentTemplate "${TEMPLATE_NAME}"`);
 } else {
   if (existingTpl) {
-    db.exec(`DELETE FROM AgentTemplate WHERE id = '${TEMPLATE_ID}'`);
+    db.prepare('DELETE FROM AgentTemplate WHERE id = ?').run(TEMPLATE_ID);
   }
 
   db.prepare(`
@@ -168,7 +164,7 @@ if (existingAgent && !force) {
   skip(`AgentConfig "${AGENT_PROJECT}"`);
 } else {
   if (existingAgent) {
-    db.exec(`DELETE FROM AgentConfig WHERE project = '${AGENT_PROJECT}'`);
+    db.prepare('DELETE FROM AgentConfig WHERE project = ?').run(AGENT_PROJECT);
   }
 
   db.prepare(`

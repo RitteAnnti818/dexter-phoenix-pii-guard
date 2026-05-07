@@ -32,8 +32,15 @@ const PORT = Number(process.env.PORT ?? 2024);
 const MODEL = process.env.DEXTER_MODEL ?? process.env.DEXTER_EVAL_MODEL ?? 'gpt-4o-mini';
 const PHOENIX_URL = process.env.PHOENIX_COLLECTOR_ENDPOINT?.replace('/v1/traces', '') ?? 'http://localhost:6006';
 
-// ── AgentRunCapture cache (keyed by query text) ──────────────────────────────
-const captureCache = new Map<string, AgentRunCapture>();
+// ── AgentRunCapture cache (keyed by query text, TTL 30min) ───────────────────
+const captureCache = new Map<string, { capture: AgentRunCapture; ts: number }>();
+const CACHE_TTL_MS = 30 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of captureCache) {
+    if (now - v.ts > CACHE_TTL_MS) captureCache.delete(k);
+  }
+}, 60_000);
 
 // ── Kill stale process on port ───────────────────────────────────────────────
 try {
@@ -205,13 +212,15 @@ const server = Bun.serve({
             try {
               const { capture } = await runAgent(query);
               // Cache for later evaluation
-              captureCache.set(query.trim(), capture);
+              captureCache.set(query.trim(), { capture, ts: Date.now() });
               console.error(`[chat] cached capture for: ${query.slice(0, 50)}... (${captureCache.size} total)`);
 
               send({
                 event: 'messages/partial',
                 data: [{ type: 'ai', content: capture.finalAnswer }],
               });
+              // Send capture data for DB persistence
+              send({ event: 'capture', data: capture });
               send('[DONE]');
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
@@ -237,27 +246,26 @@ const server = Bun.serve({
 
     // ── POST /evaluate — Run original evaluator on cached capture ──
     if (req.method === 'POST' && url.pathname === '/evaluate') {
-      const { evalName, query, response, context, rowData } = await req.json() as {
+      const { evalName, query, response, context, rowData, capture: reqCapture } = await req.json() as {
         evalName: string;
         query: string;
         response: string;
         context: string;
         rowData?: Record<string, string>;
+        capture?: AgentRunCapture;
       };
 
-      // Look up cached capture
-      let capture = captureCache.get(query.trim());
-      if (!capture) {
-        // Fallback: build minimal capture from response only
-        capture = {
+      // Priority: request capture (from DB) > memory cache > minimal fallback
+      let capture: AgentRunCapture = reqCapture
+        ?? captureCache.get(query.trim())?.capture
+        ?? {
           question: query,
           finalAnswer: response,
           thinking: [],
           toolCalls: [],
           iterations: 0,
         };
-      }
-      // Override finalAnswer with what IQHub stored (in case of mismatch)
+      // Override finalAnswer with what IQHub stored
       capture = { ...capture, finalAnswer: response };
 
       const row = buildDatasetRow(query, context, rowData);
