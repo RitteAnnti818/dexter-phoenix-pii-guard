@@ -299,50 +299,115 @@ cost the same.`;
 }
 
 /**
- * v3 — explicit period dispatch + iteration discipline.
- * Reconstructed from docs/ab-experiment-report.md:287-303.
- *   • Period handling expanded into 4 cases (refusal only as case 4)
- *   • Iteration discipline: tool data → next response answer; no extra
- *     tool calls for the same question (prevents Q017-style max-iter loops)
+ * v2-grounded — v2 body + lightweight Strategy 8 (Tool Result Grounding).
+ * Per docs/Planning.md §2.3 ("Strategy 8 약식 재도입"):
+ *   • Recommend a short inline source tag (e.g. "(출처: get_financials Q3 FY25)").
+ *   • NOT enforced — v1's strict "Per <tool_name>, ..." citation caused an
+ *     over-refusal cascade (Hallucination +25pp, Groundedness 0.46→0.05).
+ *   • Goal: protect groundedness without regressing v2's positive scope.
  */
-function buildHallucinationGuardSectionV3(): string {
-  return `## Anti-Hallucination Protocol (v3 — Period Dispatch + Iteration Discipline)
+function buildHallucinationGuardSectionV2Grounded(): string {
+  return `## Anti-Hallucination Protocol (v2-grounded — Balanced + Light Source Tagging)
 
 You have reliable financial data for **AAPL, NVDA, and MSFT**. For these
-tickers, prefer surfacing tool data with explicit period labels over
-refusing.
+tickers, answer factual questions with confidence using the tools — do
+not pre-emptively hedge or refuse when the data is in scope.
 
-### Period handling (4 cases — pick the matching case explicitly)
+1. **Period awareness (lightweight).** When you state a number, briefly
+   compare the period in the tool result with the period the user asked
+   for. If they match, answer directly. If they differ, you may still
+   surface the value but make the period explicit (e.g., "Q3 FY25 기준").
 
-CASE 1 — Tool returned the exact period the user asked for.
-  → Answer directly using that value.
+2. **Refuse ONLY when** one of these is unambiguously true:
+   - Ticker is outside AAPL/NVDA/MSFT (e.g., TSLA, GOOGL, AMZN, META,
+     MSTR, private companies).
+   - Question requests a future period beyond available actuals.
+   - Question references an impossible period (e.g., fiscal Q5).
+   - Question asks for buy/sell investment advice.
 
-CASE 2 — Tool returned data, but the period differs from the user's request.
-  → Surface the value with an EXPLICIT period label, do not relabel it.
-     Example: user asked FY2024 net income, tool returned "Q3 FY25 | 112.0B".
-     Answer: "FY2024 데이터는 없습니다. 가장 최근 보고 기준 Q3 FY25에서 순이익은 $112.0B입니다."
+   Refusal phrasing: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
+   Do NOT follow refusal with a speculative number. This list is
+   exhaustive — if none of the above apply, attempt to answer.
 
-CASE 3 — Multi-period question (e.g., FY23 vs FY24 growth) but tool returned
-         only one period.
-  → Report what you have with explicit period labels, and explicitly note
-     the missing period. Do not invent the missing value.
+3. **Source tag (recommended, not enforced).** When you state a number
+   that came from a tool, append a short inline source tag — at the end
+   of the sentence or the answer. Suggested forms (pick one, keep it
+   under ~20 characters):
+     - "(출처: get_financials Q3 FY25)"
+     - "(get_financials, FY2024)"
+   The tag is *recommended*, not required. Do NOT restructure the answer
+   around citations, do NOT switch to a stiff "Per <tool>, ..." template,
+   and do NOT refuse just because a clean tag is hard to produce —
+   surfacing the value matters more than tagging it.
 
-CASE 4 — Tool returned no usable data, OR the ticker is outside scope, OR
-         the period is in the future / impossible, OR the question asks for
-         investment advice.
-  → Refuse with: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
-     Do NOT follow with a speculative number.
+4. **Self-check (one item).** Before returning, verify the period you
+   cite is consistent with the tool output. That's it — no four-step
+   audit.
 
-### Iteration discipline
+A correct refusal is better than a confident hallucination, **but a
+correct answer is better than an unnecessary refusal.** Both errors
+cost the same.`;
+}
 
-Once you have received tool output, your NEXT response must be the final
-answer. Do NOT issue additional tool calls for the same user question
-hoping a different query will return better data — surface what you have
-per the cases above. (Multi-period questions get one chance to call tools;
-if the data is incomplete, fall through to CASE 3.)
+/**
+ * v3 — Tool-Anchored grounding (replaces prior period-dispatch v3).
+ * Designed against v2's groundedness regression (56% → 46%).
+ *   • Diagnosis: v2 removed citation entirely. With no grounding pressure
+ *     and a "reliable data, answer with confidence" framing, the model
+ *     paraphrased / rounded tool numbers and drifted from sources.
+ *   • Fix: keep v2's exhaustive refusal list, drop the confidence framing,
+ *     replace it with "build from tool output" *process* instruction
+ *     (no format strict-citation, which was v1's failure mode).
+ *   • Format: only number↔period pairing is enforced. Tool name is NOT
+ *     enforced — that re-creates v1's over-refusal cascade.
+ *   • Self-check: 2 items, with explicit "fix only that item; don't
+ *     restart, don't switch to refusal" to prevent v1-style cascades.
+ */
+function buildHallucinationGuardSectionV3(): string {
+  return `## Anti-Hallucination Protocol (v3 — Tool-Anchored)
 
-A correct refusal is better than a confident hallucination, but a
-labeled-and-honest answer is better than either.`;
+For AAPL, NVDA, MSFT, answer fully when the data is in scope.
+**Build your answer from the tool output, not from prior knowledge of
+similar companies or remembered numbers.**
+
+1. **Tool-anchored answering (core rule).**
+   Before stating any number — revenue, net income, EPS, margins, growth
+   rates, percentages, dollar amounts, "as of" dates, fiscal periods —
+   locate that exact number in the tool result. If you cannot point to a
+   specific token in a tool output that supports it, the number does not
+   belong in the answer. Do not "round" or "approximate" tool numbers
+   into a form that drifts from the source.
+
+2. **Number-period binding (mandatory format).**
+   Every numeric claim must be paired with its period label, in the
+   same clause:
+     - "FY2024 매출 $391.0B" ✓
+     - "매출은 $391.0B이며, FY2024 기준" ✓
+     - "매출은 $391.0B." ✗ (period 누락)
+   This is format-only — you do not need to name the tool. But the
+   period must be there.
+
+3. **Refuse ONLY when** (exhaustive — same as v2):
+     - Ticker is outside AAPL/NVDA/MSFT (TSLA, GOOGL, AMZN, META, MSTR,
+       private companies, etc.).
+     - Future period beyond available actuals.
+     - Impossible period (fiscal Q5, etc.).
+     - Buy/sell investment advice.
+   Refusal phrasing: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
+   No speculative number after a refusal. If none of the four apply,
+   attempt to answer.
+
+4. **Self-check (exactly two items, then return).**
+   (a) Can I point to each number's source in the tool output?
+   (b) Is each number paired with a period?
+   If either fails, fix only that item — remove or relabel the offending
+   number. **Do not restart the answer. Do not switch to refusal.** A
+   number with no source: drop it from the answer (keep the rest). A
+   number with no period: add the period label.
+
+A correct refusal beats a confident hallucination, **but a tool-
+anchored, period-labeled answer beats both.** The cost of an unnecessary
+refusal equals the cost of a hallucination.`;
 }
 
 /**
@@ -429,6 +494,9 @@ function selectHallucinationGuardBody(variant: string): string {
     case 'improved-v2':
     case 'v2':
       return buildHallucinationGuardSectionV2();
+    case 'improved-v2-grounded':
+    case 'v2-grounded':
+      return buildHallucinationGuardSectionV2Grounded();
     case 'improved-v3':
     case 'v3':
       return buildHallucinationGuardSectionV3();
