@@ -10,7 +10,9 @@
 import { Database } from 'bun:sqlite';
 
 // ── Config ───────────────────────────────────────────────────────────────────
-const IQHUB_DB = process.env.IQHUB_DB
+const dbArg = process.argv.find(a => a.endsWith('.db'));
+const IQHUB_DB = dbArg
+  ?? process.env.IQHUB_DB
   ?? require('path').resolve(process.cwd(), '../my-own-phoenix/prisma/dev.db');
 const DATASET_PATH = 'src/observability/datasets/hallucination_50q.json';
 const DATASET_NAME = 'hallucination-50q';
@@ -54,6 +56,15 @@ db.exec('PRAGMA journal_mode=WAL');
 
 const now = new Date().toISOString();
 const evalNames = EVAL_PROMPTS.map(e => e.name);
+
+// ── 0. Schema migration ──────────────────────────────────────────────────────
+console.log(`\n${BOLD}── Schema Migration ─────────────────────────────────${RESET}`);
+try {
+  db.exec('ALTER TABLE DatasetRunResult ADD COLUMN capture TEXT DEFAULT "{}"');
+  ok('Added capture column to DatasetRunResult');
+} catch {
+  skip('capture column (already exists)');
+}
 
 // ── 1. Dataset + Rows ────────────────────────────────────────────────────────
 console.log(`\n${BOLD}── Dataset ──────────────────────────────────────────${RESET}`);
