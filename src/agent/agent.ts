@@ -88,6 +88,8 @@ export class Agent {
   private readonly memoryEnabled: boolean;
   private readonly messageQueue?: MessageQueue;
   private compactionFailures: number = 0;
+  private reflectionUsed: boolean = false;
+  private toolReflectionUsed: boolean = false;
 
   private constructor(
     config: AgentConfig,
@@ -319,9 +321,17 @@ export class Agent {
           yield { type: 'thinking', message: trimmedText };
         }
 
-        // No tool calls = final answer — apply Output Guard before emit.
+        // No tool calls = final answer (reflection check + Output Guard)
         if (!hasToolCalls(response)) {
-          const safeAnswer = await maskAgentOutput(responseText ?? '');
+          const text = responseText ?? '';
+          const reflectionNote = this.buildReflectionNote(text, query);
+          if (reflectionNote && ctx.iteration < this.maxIterations) {
+            // Inject reflection and let the agent revise
+            messages.push(response);
+            messages.push(new HumanMessage(reflectionNote));
+            continue;
+          }
+          const safeAnswer = await maskAgentOutput(text);
           finalAnswerForSpan = safeAnswer;
           yield* this.handleDirectResponse(safeAnswer, ctx, { agentSpanId, traceId });
           return;
@@ -351,6 +361,12 @@ export class Agent {
         toolMessages = enforceResultBudget(toolMessages);
 
         messages.push(...toolMessages);
+
+        // Post-tool reflection: inject verification hints as system note
+        const toolReflection = this.buildToolResultReflection(query, toolMessages);
+        if (toolReflection) {
+          messages.push(new HumanMessage(toolReflection));
+        }
 
         if (denied) {
           const totalTime = Date.now() - ctx.startTime;
@@ -442,6 +458,130 @@ export class Agent {
       return { role, content: text.slice(0, 500) };
     });
     return JSON.stringify(out);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reflection: code-level verification before final answer
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check the agent's final answer for common errors that LLMs struggle with:
+   * 1. Date comparison: refusing past dates as "future"
+   * 2. Refusing with no tool call when a tool should have been tried
+   *
+   * Returns a correction note to inject, or null if no issues found.
+   * Only triggers ONCE per run to avoid infinite loops.
+   */
+  private buildReflectionNote(answer: string, query: string): string | null {
+    if (this.reflectionUsed) return null;
+
+    const issues: string[] = [];
+    const currentYear = new Date().getFullYear();
+
+    // 1. Date comparison: detect refusal claiming "future" for a past date
+    const refusalPattern = /해당 데이터를 제공할 수 없습니다|미래|future|제공할 수 없/i;
+    if (refusalPattern.test(answer)) {
+      const yearRegex = /(\d{4})/g;
+      const queryYears: number[] = [];
+      let ym: RegExpExecArray | null;
+      while ((ym = yearRegex.exec(query)) !== null) queryYears.push(parseInt(ym[1]));
+      const pastYears = queryYears.filter(y => y >= 2020 && y < currentYear);
+
+      if (pastYears.length > 0) {
+        issues.push(
+          `[시스템 검증] 질문에 언급된 연도 ${pastYears.join(', ')}은(는) 현재 연도 ${currentYear}보다 이전이므로 과거입니다. ` +
+          `"미래"라는 이유로 거절하지 마세요. 도구를 호출하여 데이터를 조회한 후 답변하세요.`
+        );
+      }
+    }
+
+    // 2. FY period mismatch: answer mentions a different FY than the query asked
+    const queryFyRegex = /FY(\d{4})|(\d{4})\s*회계연도/g;
+    const answerFyRegex = /FY(\d{4})/g;
+    const queryFYs: string[] = [];
+    const answerFYs: string[] = [];
+    let fm: RegExpExecArray | null;
+    while ((fm = queryFyRegex.exec(query)) !== null) queryFYs.push(fm[1] || fm[2]);
+    while ((fm = answerFyRegex.exec(answer)) !== null) answerFYs.push(fm[1]);
+
+    if (queryFYs.length === 1 && answerFYs.length > 0) {
+      const requested = queryFYs[0];
+      const wrongFYs = answerFYs.filter(fy => fy !== requested);
+      if (wrongFYs.length > 0 && !answerFYs.includes(requested)) {
+        issues.push(
+          `[시스템 검증] 질문은 FY${requested} 데이터를 요청했지만, 답변은 FY${wrongFYs[0]} 데이터를 사용하고 있습니다. ` +
+          `올바른 회계연도의 데이터를 사용하고 있는지 확인하세요.`
+        );
+      }
+    }
+
+    if (issues.length === 0) return null;
+    this.reflectionUsed = true;
+    return issues.join('\n');
+  }
+
+  /**
+   * Post-tool reflection: check tool results for period/data consistency.
+   * Injects a verification hint ONCE so the agent can self-correct.
+   */
+  private buildToolResultReflection(query: string, toolMessages: ToolMessage[]): string | null {
+    if (this.toolReflectionUsed) return null;
+
+    const issues: string[] = [];
+    const currentYear = new Date().getFullYear();
+    const allContent = toolMessages.map(tm =>
+      typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content)
+    ).join('\n');
+
+    // 1. FY mismatch: query asks FY2024 but tool returned FY2025
+    const queryFyRegex = /FY(\d{4})|(\d{4})\s*회계연도/g;
+    const queryFYs: string[] = [];
+    let fm: RegExpExecArray | null;
+    while ((fm = queryFyRegex.exec(query)) !== null) queryFYs.push(fm[1] || fm[2]);
+
+    if (queryFYs.length > 0) {
+      const toolFyRegex = /FY(\d{4})/g;
+      const toolFYs: string[] = [];
+      while ((fm = toolFyRegex.exec(allContent)) !== null) toolFYs.push(fm[1]);
+      const requested = queryFYs[0];
+
+      if (toolFYs.length > 0 && !toolFYs.includes(requested)) {
+        issues.push(
+          `[시스템 검증] 질문은 FY${requested} 데이터를 요청했지만, tool이 반환한 데이터는 FY${toolFYs[0]}입니다. ` +
+          `FY${requested} 데이터가 포함되어 있는지 확인하고, 없다면 다른 period의 데이터임을 답변에 명시하세요.`
+        );
+      }
+    }
+
+    // 2. Tool returned error — remind agent to try alternatives
+    if (/error|Error|실패|failed/i.test(allContent)) {
+      const yearRegex = /(\d{4})/g;
+      const qYears: number[] = [];
+      let ym2: RegExpExecArray | null;
+      while ((ym2 = yearRegex.exec(query)) !== null) qYears.push(parseInt(ym2[1]));
+      const pastYears = qYears.filter(y => y >= 2020 && y < currentYear);
+
+      if (pastYears.length > 0) {
+        issues.push(
+          `[시스템 검증] tool이 에러를 반환했지만, 요청한 날짜(${pastYears.join(', ')})는 과거입니다. ` +
+          `"미래"로 판단하지 말고, 가능하면 web_search 등 대안 도구를 시도하세요.`
+        );
+      }
+    }
+
+    // 3. Metric confusion: query asks gross profit but tool shows revenue
+    if (/매출총이익|gross profit/i.test(query) && !/gross_profit|cost_of_goods/i.test(allContent)) {
+      if (/revenue/i.test(allContent)) {
+        issues.push(
+          `[시스템 검증] 질문은 매출총이익(gross profit)을 요청했지만, tool 결과에 gross_profit 필드가 보이지 않습니다. ` +
+          `revenue(매출)와 혼동하지 마세요. gross_profit = revenue - cost_of_goods_sold.`
+        );
+      }
+    }
+
+    if (issues.length === 0) return null;
+    this.toolReflectionUsed = true;
+    return `[자동 검증 — 답변 전 확인 사항]\n${issues.join('\n')}`;
   }
 
   // ---------------------------------------------------------------------------
