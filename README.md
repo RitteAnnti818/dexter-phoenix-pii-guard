@@ -246,6 +246,6 @@ bun run scripts/build-dashboard.ts --serve --port 8080
 
 ---
 
-## 라이선스 및 배경
+## 라이선스
 
 전북대 6-7주차 AI Observability 실습 과제 (2026년 4월) 산출물입니다. 원본 Dexter 라이선스를 따르며, 본 모듈은 `feat/phoenix-observability` 브랜치에 추가 구현되어 있습니다.
