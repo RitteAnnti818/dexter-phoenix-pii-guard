@@ -8,6 +8,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { dexterPath } from './paths.js';
+import { sanitizeForStorage } from '../observability/guards/piiGuard.js';
 
 /** Maximum characters for a single tool result in context. */
 export const MAX_TOOL_RESULT_CHARS = 50_000;
@@ -31,9 +32,10 @@ export function persistLargeResult(
 
   const sanitizedId = toolCallId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const filePath = `${RESULTS_DIR}/${sanitizedId}.txt`;
-  writeFileSync(filePath, result, 'utf-8');
+  const safeResult = sanitizeForStorage(result);
+  writeFileSync(filePath, safeResult, 'utf-8');
 
-  const preview = result.slice(0, PREVIEW_CHARS);
+  const preview = safeResult.slice(0, PREVIEW_CHARS);
   return { preview, filePath };
 }
 

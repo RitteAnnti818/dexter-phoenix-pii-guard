@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { dexterPath } from '../utils/paths.js';
+import { sanitizeForStorage, sanitizeValueForStorage } from '../observability/guards/piiGuard.js';
 
 /**
  * Record of a tool call for external consumers (e.g., DoneEvent)
@@ -83,12 +84,13 @@ export class Scratchpad {
 
   constructor(query: string, limitConfig?: Partial<ToolLimitConfig>) {
     this.limitConfig = { ...DEFAULT_LIMIT_CONFIG, ...limitConfig };
+    const safeQuery = sanitizeForStorage(query);
 
     if (!existsSync(this.scratchpadDir)) {
       mkdirSync(this.scratchpadDir, { recursive: true });
     }
 
-    const hash = createHash('md5').update(query).digest('hex').slice(0, 12);
+    const hash = createHash('md5').update(safeQuery).digest('hex').slice(0, 12);
     const now = new Date();
     const timestamp = now.toISOString()
       .slice(0, 19)           // "2026-01-21T15:30:45"
@@ -97,7 +99,7 @@ export class Scratchpad {
     this.filepath = join(this.scratchpadDir, `${timestamp}_${hash}.jsonl`);
 
     // Write initial entry with the query
-    this.append({ type: 'init', content: query, timestamp: new Date().toISOString() });
+    this.append({ type: 'init', content: safeQuery, timestamp: new Date().toISOString() });
   }
 
   /**
@@ -114,8 +116,8 @@ export class Scratchpad {
       type: 'tool_result',
       timestamp: new Date().toISOString(),
       toolName,
-      args,
-      result: this.parseResultSafely(result),
+      args: sanitizeValueForStorage(args),
+      result: sanitizeValueForStorage(this.parseResultSafely(result)),
     });
   }
 
@@ -299,7 +301,7 @@ export class Scratchpad {
    * Append thinking/reasoning
    */
   addThinking(thought: string): void {
-    this.append({ type: 'thinking', content: thought, timestamp: new Date().toISOString() });
+    this.append({ type: 'thinking', content: sanitizeForStorage(thought), timestamp: new Date().toISOString() });
   }
 
   /**
@@ -450,7 +452,7 @@ export class Scratchpad {
    * Append-only write
    */
   private append(entry: ScratchpadEntry): void {
-    appendFileSync(this.filepath, JSON.stringify(entry) + '\n');
+    appendFileSync(this.filepath, JSON.stringify(sanitizeValueForStorage(entry)) + '\n');
   }
 
   /**

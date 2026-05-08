@@ -8,8 +8,8 @@
 //      (cross_session and prompt_injection categories — agent retrieved
 //      stored PII and put it back in the user-visible response).
 
-import { regexDetect, maskText, dedupeOverlapping, type PIIDetection } from './regexGuard.js';
-import { llmDetect } from './llmGuard.js';
+import type { PIIDetection } from './regexGuard.js';
+import { guardOutput } from './piiGuard.js';
 
 export interface OutputGuardResult {
   /** Hard-block: cross-session PII leak detected — replace output entirely */
@@ -20,6 +20,8 @@ export interface OutputGuardResult {
   maskedOutput: string;
   /** Memory-seed PII tokens that appeared verbatim in the output */
   leakedTokens: string[];
+  /** HMAC fingerprints for cross-session leaked PII. Raw values are not returned. */
+  leakedFingerprints: string[];
   /** Human-readable reason if blocked */
   reason?: string;
 }
@@ -38,43 +40,23 @@ export async function checkOutput(
   output: string,
   options: OutputGuardOptions = {},
 ): Promise<OutputGuardResult> {
-  const stage1 = regexDetect(output);
-  const stage2 = await llmDetect(output, { stage1Detections: stage1 });
-  const detections = dedupeOverlapping([...stage1, ...stage2]);
+  const result = await guardOutput(output, {
+    surface: 'agent',
+    direction: 'output',
+    memorySeed: options.memorySeed,
+    blockedPlaceholder: options.blockedPlaceholder ?? DEFAULT_BLOCKED_PLACEHOLDER,
+  });
 
-  const leakedTokens = options.memorySeed
-    ? findLeakedTokens(options.memorySeed, output)
-    : [];
-
-  if (leakedTokens.length > 0) {
-    return {
-      blocked: true,
-      detections,
-      maskedOutput: options.blockedPlaceholder ?? DEFAULT_BLOCKED_PLACEHOLDER,
-      leakedTokens,
-      reason: `Cross-session leak: memory PII appeared verbatim in output (${leakedTokens.join(', ')})`,
-    };
-  }
+  const leakedTokens = result.leakedFingerprints.map((fp) => `fp:${fp}`);
 
   return {
-    blocked: false,
-    detections,
-    maskedOutput: detections.length > 0 ? maskText(output, detections) : output,
-    leakedTokens: [],
+    blocked: result.action === 'block',
+    detections: result.detections,
+    maskedOutput: result.maskedText,
+    leakedTokens,
+    leakedFingerprints: result.leakedFingerprints,
+    reason: result.action === 'block'
+      ? `Cross-session leak: memory PII fingerprint matched (${leakedTokens.join(', ')})`
+      : undefined,
   };
-}
-
-// memory_seed format from the dataset:
-//   "사용자 <type>: <value>"   or comma-separated multiple key:value pairs
-// Extract just the values (the actual PII tokens) for leak detection.
-function findLeakedTokens(memorySeed: string, output: string): string[] {
-  const tokens: string[] = [];
-  for (const part of memorySeed.split(',')) {
-    const colonIdx = part.indexOf(':');
-    if (colonIdx === -1) continue;
-    const value = part.slice(colonIdx + 1).trim();
-    if (value.length === 0) continue;
-    if (output.includes(value)) tokens.push(value);
-  }
-  return tokens;
 }

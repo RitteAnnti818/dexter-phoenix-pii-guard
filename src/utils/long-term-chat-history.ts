@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { getDexterDir } from './paths.js';
+import { sanitizeForStorage } from '../observability/guards/piiGuard.js';
 
 /**
  * Represents a conversation entry (user message + agent response pair)
@@ -87,7 +88,7 @@ export class LongTermChatHistory {
     const entry: ConversationEntry = {
       id: Date.now().toString(),
       timestamp: new Date().toISOString(),
-      userMessage: message,
+      userMessage: sanitizeForStorage(message),
       agentResponse: null,
     };
 
@@ -106,7 +107,7 @@ export class LongTermChatHistory {
     }
 
     if (this.messages.length > 0) {
-      this.messages[0].agentResponse = response;
+      this.messages[0].agentResponse = sanitizeForStorage(response);
       await this.save();
     }
   }

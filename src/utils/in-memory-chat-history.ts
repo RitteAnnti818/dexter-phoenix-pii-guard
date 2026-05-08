@@ -1,5 +1,6 @@
 import { HumanMessage, AIMessage, type BaseMessage } from '@langchain/core/messages';
 import { callLlm, DEFAULT_MODEL } from '../model/llm.js';
+import { sanitizeForStorage } from '../observability/guards/piiGuard.js';
 
 const DEFAULT_HISTORY_LIMIT = 10;
 const FULL_ANSWER_TURNS = 3;
@@ -67,9 +68,10 @@ Generate a brief 1-2 sentence summary of this answer.`;
    * Saves a new user query to history immediately (before answer is available).
    */
   saveUserQuery(query: string): void {
+    const safeQuery = sanitizeForStorage(query);
     this.messages.push({
       id: this.messages.length,
-      query,
+      query: safeQuery,
       answer: null,
       summary: null,
     });
@@ -84,8 +86,9 @@ Generate a brief 1-2 sentence summary of this answer.`;
       return;
     }
 
-    lastMessage.answer = answer;
-    lastMessage.summary = await this.generateSummary(lastMessage.query, answer);
+    const safeAnswer = sanitizeForStorage(answer);
+    lastMessage.answer = safeAnswer;
+    lastMessage.summary = await this.generateSummary(lastMessage.query, safeAnswer);
   }
 
   /**
