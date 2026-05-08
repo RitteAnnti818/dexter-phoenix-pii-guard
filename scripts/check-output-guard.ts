@@ -13,6 +13,7 @@
  */
 import 'dotenv/config';
 import { checkOutput } from '../src/observability/guards/outputGuard.js';
+import { maskSensitiveTextSync } from '../src/observability/guards/piiGuard.js';
 
 interface Test {
   name: string;
@@ -84,13 +85,13 @@ for (const t of tests) {
   else failed++;
 
   console.log(`${mark} ${t.name}`);
-  console.log(`  output:        ${t.output}`);
+  console.log(`  output:        ${maskSensitiveTextSync(t.output)}`);
   console.log(`  blocked:       ${result.blocked} (expected ${t.expectBlocked})`);
   if (result.leakedTokens.length > 0) {
     console.log(`  leakedTokens:  [${result.leakedTokens.join(', ')}]`);
   }
   if (result.detections.length > 0) {
-    console.log(`  detections:    ${result.detections.map((d) => `${d.type}=${JSON.stringify(d.match)}`).join(', ')}`);
+    console.log(`  detections:    ${result.detections.map((d) => `${d.type}="[REDACTED_${d.type.toUpperCase()}]"`).join(', ')}`);
   }
   console.log(`  maskedOutput:  ${result.maskedOutput}`);
   if (result.reason) console.log(`  reason:        ${result.reason}`);

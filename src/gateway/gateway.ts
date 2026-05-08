@@ -25,10 +25,11 @@ import type { GroupContext } from '../agent/prompts.js';
 import { appendFileSync } from 'node:fs';
 import { dexterPath } from '../utils/paths.js';
 import { getSetting } from '../utils/config.js';
+import { guardInput, guardOutput, maskSensitiveTextSync } from '../observability/guards/piiGuard.js';
 
 const LOG_PATH = dexterPath('gateway-debug.log');
 function debugLog(msg: string) {
-  appendFileSync(LOG_PATH, `${new Date().toISOString()} ${msg}\n`);
+  appendFileSync(LOG_PATH, `${new Date().toISOString()} ${maskSensitiveTextSync(msg)}\n`);
 }
 
 export type GatewayService = {
@@ -42,10 +43,12 @@ function elide(text: string, maxLen: number): string {
 }
 
 async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage): Promise<void> {
-  const bodyPreview = elide(inbound.body.replace(/\n/g, ' '), 50);
+  const inputGuard = await guardInput(inbound.body, { surface: 'gateway', direction: 'input' });
+  const safeInboundBody = inputGuard.maskedText;
+  const bodyPreview = elide(safeInboundBody.replace(/\n/g, ' '), 50);
   const isGroup = inbound.chatType === 'group';
-  console.log(`Inbound message ${inbound.from} (${inbound.chatType}, ${inbound.body.length} chars): "${bodyPreview}"`);
-  debugLog(`[gateway] handleInbound from=${inbound.from} isGroup=${isGroup} body="${inbound.body.slice(0, 30)}..."`);
+  console.log(`Inbound message ${inbound.from} (${inbound.chatType}, ${safeInboundBody.length} chars): "${bodyPreview}"`);
+  debugLog(`[gateway] handleInbound from=${inbound.from} isGroup=${isGroup} body="${safeInboundBody.slice(0, 30)}..."`);
 
   // --- Group-specific: track member, check mention gating ---
   if (isGroup) {
@@ -56,7 +59,7 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
       selfJid: inbound.selfJid,
       selfLid: inbound.selfLid,
       selfE164: inbound.selfE164,
-      body: inbound.body,
+      body: safeInboundBody,
     });
     debugLog(`[gateway] group mention check: mentioned=${mentioned}`);
 
@@ -65,7 +68,7 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
       recordGroupMessage(inbound.chatId, {
         senderName: inbound.senderName ?? inbound.senderId,
         senderId: inbound.senderId,
-        body: inbound.body,
+        body: safeInboundBody,
         timestamp: inbound.timestamp ?? Date.now(),
       });
       debugLog(`[gateway] group message buffered (no mention), skipping reply`);
@@ -132,7 +135,7 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
     await startTypingLoop();
 
     // --- Build query: for groups, include buffered history context ---
-    let query = inbound.body;
+    let query = safeInboundBody;
     let groupContext: GroupContext | undefined;
 
     if (isGroup) {
@@ -141,7 +144,7 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
         history,
         currentSenderName: inbound.senderName ?? inbound.senderId,
         currentSenderId: inbound.senderId,
-        currentBody: inbound.body,
+        currentBody: safeInboundBody,
       });
       debugLog(`[gateway] group query with ${history.length} history entries`);
 
@@ -185,20 +188,25 @@ async function handleInbound(cfg: GatewayConfig, inbound: WhatsAppInboundMessage
 
     if (answer.trim()) {
       const cleanedAnswer = cleanMarkdownForWhatsApp(answer).trim();
+      const outputGuard = await guardOutput(cleanedAnswer, {
+        surface: 'gateway',
+        direction: 'output',
+      });
+      const safeAnswer = outputGuard.maskedText;
 
       if (isGroup) {
         // For groups, use inbound.reply() directly (bypasses outbound strict E.164 checks)
         debugLog(`[gateway] sending group reply to ${inbound.chatId}`);
-        await inbound.reply(cleanedAnswer);
+        await inbound.reply(safeAnswer);
       } else {
         debugLog(`[gateway] sending reply to ${inbound.replyToJid}`);
         await sendMessageWhatsApp({
           to: inbound.replyToJid,
-          body: cleanedAnswer,
+          body: safeAnswer,
           accountId: inbound.accountId,
         });
       }
-      console.log(`Sent reply (${answer.length} chars, ${durationMs}ms)`);
+      console.log(`Sent reply (${safeAnswer.length} chars, ${durationMs}ms)`);
       debugLog(`[gateway] reply sent`);
     } else {
       console.log(`Agent returned empty response (${durationMs}ms)`);
@@ -238,4 +246,3 @@ export async function startGateway(params: { configPath?: string } = {}): Promis
     snapshot: () => manager.getSnapshot(),
   };
 }
-

@@ -4,6 +4,7 @@ import { createMessageQueue, type MessageQueue, type QueuePriority } from '../ut
 import { HEARTBEAT_OK_TOKEN } from './heartbeat/suppression.js';
 import type { AgentEvent } from '../agent/types.js';
 import type { GroupContext } from '../agent/prompts.js';
+import { guardInput, guardOutput, maskSensitiveTextSync } from '../observability/guards/piiGuard.js';
 
 type SessionState = {
   history: InMemoryChatHistory;
@@ -49,7 +50,7 @@ export function enqueueForSession(
 ): void {
   const session = getSession(sessionKey, model);
   session.queue.enqueue({
-    text,
+    text: maskSensitiveTextSync(text),
     priority,
     enqueuedAt: Date.now(),
     source: `whatsapp:${sessionKey}`,
@@ -75,11 +76,13 @@ export async function runAgentForMessage(req: AgentRunRequest): Promise<string> 
   const isolated = req.isolatedSession ?? false;
   const session = isolated ? null : getSession(req.sessionKey, req.model);
   let finalAnswer = '';
+  const inputGuard = await guardInput(req.query, { surface: 'gateway', direction: 'input' });
+  const guardedQuery = inputGuard.maskedText;
 
   const run = async () => {
     if (session) {
       session.isRunning = true;
-      session.history.saveUserQuery(req.query);
+      session.history.saveUserQuery(guardedQuery);
     }
 
     const agent = await Agent.create({
@@ -93,18 +96,26 @@ export async function runAgentForMessage(req: AgentRunRequest): Promise<string> 
       messageQueue: session?.queue,
     });
 
-    for await (const event of agent.run(req.query, session?.history)) {
-      await req.onEvent?.(event);
-      if (event.type === 'done') {
-        finalAnswer = event.answer;
+    for await (const event of agent.run(guardedQuery, session?.history)) {
+      let outboundEvent = event;
+      if (outboundEvent.type === 'done') {
+        const outputGuard = await guardOutput(outboundEvent.answer, {
+          surface: 'gateway',
+          direction: 'output',
+        });
+        outboundEvent = { ...outboundEvent, answer: outputGuard.maskedText };
+        finalAnswer = outputGuard.maskedText;
       }
+      await req.onEvent?.(outboundEvent);
     }
 
     // Post-run: drain any messages that arrived after the agent's last check
     if (session && !session.queue.isEmpty()) {
       const remaining = session.queue.dequeueAll();
       const mergedText = remaining.map(m => m.text).join('\n\n');
-      session.history.saveUserQuery(mergedText);
+      const followUpGuard = await guardInput(mergedText, { surface: 'gateway', direction: 'input' });
+      const guardedMergedText = followUpGuard.maskedText;
+      session.history.saveUserQuery(guardedMergedText);
 
       const followUp = await Agent.create({
         model: req.model,
@@ -117,11 +128,17 @@ export async function runAgentForMessage(req: AgentRunRequest): Promise<string> 
         messageQueue: session.queue,
       });
 
-      for await (const event of followUp.run(mergedText, session.history)) {
-        await req.onEvent?.(event);
-        if (event.type === 'done') {
-          finalAnswer = event.answer;
+      for await (const event of followUp.run(guardedMergedText, session.history)) {
+        let outboundEvent = event;
+        if (outboundEvent.type === 'done') {
+          const outputGuard = await guardOutput(outboundEvent.answer, {
+            surface: 'gateway',
+            direction: 'output',
+          });
+          outboundEvent = { ...outboundEvent, answer: outputGuard.maskedText };
+          finalAnswer = outputGuard.maskedText;
         }
+        await req.onEvent?.(outboundEvent);
       }
     }
 

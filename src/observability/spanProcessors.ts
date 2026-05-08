@@ -14,7 +14,7 @@
 
 import type { Context } from '@opentelemetry/api';
 import type { Span, ReadableSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { regexDetect, maskText } from './guards/regexGuard.js';
+import { detectPiiSync, sanitizeForTrace } from './guards/piiGuard.js';
 
 // OpenInference semantic convention keys that may carry user-facing text.
 const SENSITIVE_ATTR_KEYS: readonly string[] = [
@@ -69,9 +69,9 @@ export class PIIRedactingSpanProcessor implements SpanProcessor {
       if (!isSensitiveKey(key)) continue;
       const value = redacted[key];
       if (typeof value !== 'string') continue;
-      const detections = regexDetect(value);
+      const detections = detectPiiSync(value);
       if (detections.length === 0) continue;
-      redacted[key] = maskText(value, detections);
+      redacted[key] = sanitizeForTrace(value);
       redactedCount += detections.length;
     }
 

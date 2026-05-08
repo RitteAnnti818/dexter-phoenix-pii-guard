@@ -1,6 +1,7 @@
 import { callLlm } from '../model/llm.js';
 import { MemoryManager } from './index.js';
 import { CONTEXT_THRESHOLD } from '../utils/tokens.js';
+import { sanitizeForStorage } from '../observability/guards/piiGuard.js';
 
 export const MEMORY_FLUSH_TOKEN = 'NO_MEMORY_TO_FLUSH';
 
@@ -15,12 +16,13 @@ Rules:
   - Risk tolerance and investment philosophy
   - Portfolio decisions and allocation changes
   - Trade history and the reasoning behind buy/sell decisions
-  - Account details mentioned (brokerage, 401k, IRA specifics)
+  - Account types mentioned at a high level (brokerage, 401k, IRA) only when no account identifiers are present
 - Also capture personal context that affects financial advice:
   - Life events (job changes, home purchase, family changes)
   - Tax situation or jurisdiction
   - Time horizons and liquidity needs
 - Do not include temporary tool output, market data, or stock prices.
+- Never store raw personal identifiers such as resident registration numbers, account numbers, card numbers, phone numbers, or email addresses.
 - If nothing should be stored, reply exactly with ${MEMORY_FLUSH_TOKEN}.
 `.trim();
 
@@ -64,6 +66,7 @@ ${MEMORY_FLUSH_PROMPT}
   }
 
   const manager = await MemoryManager.get();
-  await manager.appendDailyMemory(`## Pre-compaction memory flush\n${response}`);
-  return { flushed: true, written: true, content: response };
+  const safeResponse = sanitizeForStorage(response);
+  await manager.appendDailyMemory(`## Pre-compaction memory flush\n${safeResponse}`);
+  return { flushed: true, written: true, content: safeResponse };
 }

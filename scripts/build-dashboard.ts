@@ -36,13 +36,14 @@ interface RowReport {
   input: string;
   expected_masked: string;
   actual_masked: string;
-  detections: { stage1: Detection[]; stage2: Detection[]; combined: Detection[] };
+  detections: { stage1: Detection[]; deterministic?: Detection[]; stage2: Detection[]; combined: Detection[] };
   outcome: 'TP' | 'FP' | 'FN' | 'TN' | 'PARTIAL';
   latency_ms: number;
   output_guard?: {
     simulated_output: string;
     blocked: boolean;
     leaked_tokens: string[];
+    leaked_fingerprints?: string[];
     expected_blocked: boolean;
     outcome: 'TP' | 'FP' | 'FN' | 'TN' | 'PARTIAL';
   };

@@ -9,6 +9,7 @@ import type {
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
+import { guardInput, guardOutput } from '../observability/guards/piiGuard.js';
 
 type ChangeListener = () => void;
 
@@ -105,20 +106,23 @@ export class AgentRunnerController {
   }
 
   async runQuery(query: string): Promise<RunQueryResult | undefined> {
+    const inputGuard = await guardInput(query, { surface: 'cli', direction: 'input' });
+    const guardedQuery = inputGuard.maskedText;
+
     this.abortController = new AbortController();
     let finalAnswer: string | undefined;
 
     const startTime = Date.now();
     const item: HistoryItem = {
       id: String(startTime),
-      query,
+      query: guardedQuery,
       events: [],
       answer: '',
       status: 'processing',
       startTime,
     };
     this.historyValue = [...this.historyValue, item];
-    this.inMemoryChatHistory.saveUserQuery(query);
+    this.inMemoryChatHistory.saveUserQuery(guardedQuery);
     this.errorValue = null;
     this.workingStateValue = { status: 'thinking' };
     this.emitChange();
@@ -131,12 +135,16 @@ export class AgentRunnerController {
         sessionApprovedTools: this.sessionApprovedTools,
         messageQueue: defaultQueue,
       });
-      const stream = agent.run(query, this.inMemoryChatHistory);
+      const stream = agent.run(guardedQuery, this.inMemoryChatHistory);
       for await (const event of stream) {
-        if (event.type === 'done') {
-          finalAnswer = (event as DoneEvent).answer;
+        let displayEvent = event;
+        if (displayEvent.type === 'done') {
+          const done = displayEvent as DoneEvent;
+          const outputGuard = await guardOutput(done.answer, { surface: 'cli', direction: 'output' });
+          displayEvent = { ...done, answer: outputGuard.maskedText };
+          finalAnswer = outputGuard.maskedText;
         }
-        await this.handleEvent(event);
+        await this.handleEvent(displayEvent);
       }
 
       // Post-run: if messages arrived after the agent's last drain, start a new turn

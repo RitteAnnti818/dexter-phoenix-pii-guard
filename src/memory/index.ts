@@ -14,6 +14,7 @@ import type {
   MMRConfig,
 } from './types.js';
 import { getSetting } from '../utils/config.js';
+import { sanitizeForStorage } from '../observability/guards/piiGuard.js';
 
 const DEFAULT_CONFIG: MemoryRuntimeConfig = {
   enabled: true,
@@ -171,20 +172,20 @@ export class MemoryManager {
 
   async appendLongTermMemory(text: string): Promise<void> {
     await this.initialize();
-    await this.store.appendMemoryFile('MEMORY.md', text);
+    await this.store.appendMemoryFile('MEMORY.md', sanitizeForStorage(text));
     this.indexer?.markDirty();
   }
 
   async appendDailyMemory(text: string): Promise<void> {
     await this.initialize();
-    await this.store.appendMemoryFile(this.getTodayFileName(), text);
+    await this.store.appendMemoryFile(this.getTodayFileName(), sanitizeForStorage(text));
     this.indexer?.markDirty();
   }
 
   async editMemory(file: string, oldText: string, newText: string): Promise<boolean> {
     await this.initialize();
     const resolved = this.resolveFileAlias(file);
-    const result = await this.store.editInMemoryFile(resolved, oldText, newText);
+    const result = await this.store.editInMemoryFile(resolved, oldText, sanitizeForStorage(newText));
     if (result) {
       this.indexer?.markDirty();
     }
@@ -204,7 +205,7 @@ export class MemoryManager {
   async appendMemory(file: string, content: string): Promise<void> {
     await this.initialize();
     const resolved = this.resolveFileAlias(file);
-    await this.store.appendMemoryFile(resolved, content);
+    await this.store.appendMemoryFile(resolved, sanitizeForStorage(content));
     this.indexer?.markDirty();
   }
 
@@ -215,7 +216,11 @@ export class MemoryManager {
 
   async loadSessionContext(): Promise<MemorySessionContext> {
     await this.initialize();
-    return this.store.loadSessionContext(this.config.maxSessionContextTokens);
+    const session = await this.store.loadSessionContext(this.config.maxSessionContextTokens);
+    return {
+      ...session,
+      text: sanitizeForStorage(session.text),
+    };
   }
 
   private resolveFileAlias(file: string): string {
