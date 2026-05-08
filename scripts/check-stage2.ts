@@ -1,16 +1,17 @@
 #!/usr/bin/env bun
 /**
  * Sanity check — runs the production PII Guard orchestrator against the
- * 100-sample PII dataset and reports per-category / per-pattern coverage.
+ * PII dataset and reports per-category / per-pattern coverage.
  *
  * Usage:
  *   bun run scripts/check-stage2.ts                  # full 100 rows
  *   bun run scripts/check-stage2.ts --limit 20       # first 20
  *   bun run scripts/check-stage2.ts --ids P066,P081  # specific rows
  *   bun run scripts/check-stage2.ts --obf            # obfuscated rows only
+ *   bun run scripts/check-stage2.ts --dataset src/observability/datasets/pii_stage2_hardcases.json
  *
- * Cost: ~$0.01 for 100 rows on gpt-4o-mini (one call per row).
- * Latency: ~50s sequential.
+ * Stage 2 first runs local hardcase decoders/normalizers and only falls back
+ * to LLM adjudication for residual ambiguous cases.
  */
 
 import 'dotenv/config';
@@ -27,12 +28,14 @@ interface Row {
   expected_masked: string;
   obfuscation_pattern?: string;
   requires_stage?: 1 | 2;
+  stage2_only?: boolean;
 }
 
 interface CliArgs {
   limit?: number;
   ids?: string[];
   obfOnly?: boolean;
+  dataset?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -42,6 +45,8 @@ function parseArgs(argv: string[]): CliArgs {
     if (a === '--limit') out.limit = Number.parseInt(argv[++i] ?? '', 10);
     else if (a === '--ids') out.ids = (argv[++i] ?? '').split(',').filter(Boolean);
     else if (a === '--obf') out.obfOnly = true;
+    else if (a === '--dataset') out.dataset = argv[++i];
+    else if (a === '--stage2-hard') out.dataset = 'src/observability/datasets/pii_stage2_hardcases.json';
   }
   return out;
 }
@@ -71,11 +76,13 @@ interface Result {
 }
 
 const args = parseArgs(process.argv);
+const datasetPath = args.dataset ?? 'src/observability/datasets/pii_100samples.json';
 const allRows = JSON.parse(
-  await Bun.file('src/observability/datasets/pii_100samples.json').text(),
+  await Bun.file(datasetPath).text(),
 ) as Row[];
 const rows = selectRows(allRows, args);
 
+console.error(`[check-stage2] dataset=${datasetPath}`);
 console.error(`[check-stage2] running ${rows.length}/${allRows.length} rows...`);
 
 function formatDetections(detections: PIIDetection[]): string {
@@ -151,7 +158,10 @@ for (const cat of categories) {
 
 const obfRows = results.filter((r) => r.row.category === 'obfuscated');
 if (obfRows.length > 0) {
-  const obfPatterns = ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
+  const dynamicPatterns = [...new Set(obfRows.map((r) => r.row.obfuscation_pattern).filter(Boolean))] as string[];
+  const obfPatterns = dynamicPatterns.length > 0
+    ? dynamicPatterns
+    : ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
   console.log('\nObfuscation pattern        n   stage   TP/PART  FN  PARTIAL detail');
   for (const pat of obfPatterns) {
     const subset = obfRows.filter((r) => r.row.obfuscation_pattern === pat);
@@ -175,6 +185,23 @@ const stage1Only = results.reduce((sum, r) => {
 }, 0);
 const stage2Contrib = totalDetections - stage1Only;
 console.log(`\nDetection contribution:  Stage 1 = ${stage1Only}, Stage 2 added = ${stage2Contrib}, total = ${totalDetections}`);
+
+const stage2OnlyRows = results.filter((r) => r.row.stage2_only);
+if (stage2OnlyRows.length > 0) {
+  const caught = stage2OnlyRows.filter((r) =>
+    (r.outcome === 'TP' || r.outcome === 'PARTIAL') &&
+    r.stage1.length === 0 &&
+    r.deterministic.length === 0 &&
+    r.stage2.length > 0
+  );
+  const missed = stage2OnlyRows.filter((r) => r.outcome === 'FN');
+  const leakedToEarlierStages = stage2OnlyRows.filter((r) => r.stage1.length > 0 || r.deterministic.length > 0);
+  const recall = caught.length / (caught.length + missed.length) || 0;
+  console.log(
+    `Stage2-only hardcases: caught=${caught.length}/${stage2OnlyRows.length} ` +
+    `recall=${recall.toFixed(3)} earlier-stage-leak=${leakedToEarlierStages.length}`,
+  );
+}
 
 // ---- Failure detail --------------------------------------------------------
 

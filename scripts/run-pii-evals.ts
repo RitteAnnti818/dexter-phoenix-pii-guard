@@ -8,6 +8,7 @@
  *   bun run scripts/run-pii-evals.ts --limit 10       # first 10
  *   bun run scripts/run-pii-evals.ts --ids P066,P081  # specific rows
  *   bun run scripts/run-pii-evals.ts --category obfuscated
+ *   bun run scripts/run-pii-evals.ts --stage2-hard    # Stage 2-only hardcases
  *
  * Writes JSONL report to .dexter/pii-evals/<timestamp>.jsonl.
  * Each row emits a Phoenix trace (project: dexter) tagged with category,
@@ -27,7 +28,8 @@ import type { PIIDetection, PIIType } from '../src/observability/guards/regexGua
 import { checkOutput } from '../src/observability/guards/outputGuard.js';
 import { guardInput } from '../src/observability/guards/piiGuard.js';
 
-const DATASET_PATH = 'src/observability/datasets/pii_100samples.json';
+const DEFAULT_DATASET_PATH = 'src/observability/datasets/pii_100samples.json';
+const STAGE2_HARD_DATASET_PATH = 'src/observability/datasets/pii_stage2_hardcases.json';
 const ATTR_MAX_LEN = 4000;
 const truncate = (s: string, n = ATTR_MAX_LEN) => (s.length > n ? `${s.slice(0, n)}...` : s);
 
@@ -45,12 +47,14 @@ interface Row {
   memory_seed?: string;
   expected_response_blocks_pii?: boolean;
   injection_type?: string;
+  stage2_only?: boolean;
 }
 
 interface CliArgs {
   limit?: number;
   ids?: string[];
   category?: Row['category'];
+  dataset?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -60,6 +64,8 @@ function parseArgs(argv: string[]): CliArgs {
     if (a === '--limit') out.limit = Number.parseInt(argv[++i] ?? '', 10);
     else if (a === '--ids') out.ids = (argv[++i] ?? '').split(',').filter(Boolean);
     else if (a === '--category') out.category = argv[++i] as Row['category'];
+    else if (a === '--dataset') out.dataset = argv[++i];
+    else if (a === '--stage2-hard') out.dataset = STAGE2_HARD_DATASET_PATH;
   }
   return out;
 }
@@ -83,6 +89,7 @@ interface RowReport {
   obfuscation_pattern?: string;
   requires_stage?: 1 | 2;
   injection_type?: string;
+  stage2_only?: boolean;
   input: string;
   expected_masked: string;
   actual_masked: string;
@@ -180,6 +187,7 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     obfuscation_pattern: row.obfuscation_pattern,
     requires_stage: row.requires_stage,
     injection_type: row.injection_type,
+    stage2_only: row.stage2_only,
     input: actualMasked,
     expected_masked: row.expected_masked,
     actual_masked: actualMasked,
@@ -257,7 +265,10 @@ function categoryBreakdown(reports: RowReport[]) {
 }
 
 function obfuscationBreakdown(reports: RowReport[]) {
-  const patterns = ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
+  const dynamicPatterns = [...new Set(reports.map((r) => r.obfuscation_pattern).filter(Boolean))] as string[];
+  const patterns = dynamicPatterns.length > 0
+    ? dynamicPatterns
+    : ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
   return patterns.map((p) => {
     const subset = reports.filter((r) => r.obfuscation_pattern === p);
     if (subset.length === 0) return { pattern: p, n: 0 };
@@ -283,9 +294,11 @@ function pad(n: number | string, w: number): string {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const all = JSON.parse(await Bun.file(DATASET_PATH).text()) as Row[];
+  const datasetPath = args.dataset ?? DEFAULT_DATASET_PATH;
+  const all = JSON.parse(await Bun.file(datasetPath).text()) as Row[];
   const rows = selectRows(all, args);
 
+  console.error(`[pii-evals] dataset=${datasetPath}`);
   console.error(`[pii-evals] running ${rows.length}/${all.length} rows...`);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -347,6 +360,25 @@ async function main() {
   const stage2Total = reports.reduce((sum, r) => sum + r.detections.stage2.length, 0);
   const combinedTotal = reports.reduce((sum, r) => sum + r.detections.combined.length, 0);
   console.log(`\nDetection counts: Stage1=${stage1Total}  Stage2=${stage2Total}  Combined=${combinedTotal}`);
+
+  const stage2OnlyRows = reports.filter((r) => r.stage2_only);
+  if (stage2OnlyRows.length > 0) {
+    const caught = stage2OnlyRows.filter((r) =>
+      (r.outcome === 'TP' || r.outcome === 'PARTIAL') &&
+      r.detections.stage1.length === 0 &&
+      r.detections.deterministic.length === 0 &&
+      r.detections.stage2.length > 0
+    );
+    const missed = stage2OnlyRows.filter((r) => r.outcome === 'FN');
+    const earlier = stage2OnlyRows.filter((r) =>
+      r.detections.stage1.length > 0 || r.detections.deterministic.length > 0
+    );
+    const recall = caught.length / (caught.length + missed.length) || 0;
+    console.log(
+      `Stage2-only hardcases: caught=${caught.length}/${stage2OnlyRows.length} ` +
+      `recall=${recall.toFixed(3)} earlier-stage-leak=${earlier.length}`,
+    );
+  }
 
   console.log(`\nWrote ${reports.length} rows → ${outPath}`);
   await flushTelemetry();

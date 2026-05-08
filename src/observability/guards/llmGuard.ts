@@ -1,18 +1,21 @@
-// Stage 2 — LLM-based contextual PII detection.
+// Stage 2 — contextual PII detection with optional LLM adjudication.
 //
 // Targets obfuscation cases that Stage 1 regex can't handle:
 //   • korean_numerals      — digits as Korean words ("공일공" = 010)
 //   • reversed             — digit-reversed PII when invalid format
 //   • contextual_inference — DEMOGRAPHIC clues (강남구 35세 김씨 여성)
 //   • spaced (EMAIL)       — letter-by-letter spaced email
+//   • encoded              — base64 / URL-encoded PII
+//   • unicode              — full-width, circled, CJK digits, zero-width separators
+//   • natural language     — split identifiers ("first group 110, middle 123...")
 //
-// Pattern reused from src/observability/evaluators/judge.ts:
+// LLM adjudication pattern reused from src/observability/evaluators/judge.ts:
 //   - JSON mode (response_format)
 //   - temperature=0 for deterministic output
 //   - 1 retry on parse failure, then graceful fallback to []
 
 import { ChatOpenAI } from '@langchain/openai';
-import type { PIIDetection, PIIType } from './regexGuard.js';
+import { dedupeOverlapping, regexDetect, type PIIDetection, type PIIType } from './regexGuard.js';
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const FALLBACK_CONFIDENCE = 0.7;
@@ -120,6 +123,75 @@ const TYPE_LOOKUP: Record<string, PIIType> = {
 
 const HIGH_CONFIDENCE_THRESHOLD = 0.85;
 const KOREAN_NUMERAL_SEQUENCE_RE = /[공영령일이삼사오육륙칠팔구][공영령일이삼사오육륙칠팔구\s\-.@_*]*/g;
+const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF]/;
+const URL_ENCODED_RE = /\b[A-Za-z0-9%._+-]*(?:%[0-9A-Fa-f]{2})[A-Za-z0-9%._+-]*\b/g;
+const BASE64_RE = /(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{12,}={0,2})(?![A-Za-z0-9+/=])/g;
+const UNICODE_DIGITISH_RE =
+  /[0-9０-９⓪①②③④⑤⑥⑦⑧⑨零〇一二三四五六七八九][0-9０-９⓪①②③④⑤⑥⑦⑧⑨零〇一二三四五六七八九\s\-.@_*／\/·・,，、－\u200B-\u200D\uFEFF]*/g;
+const ENGLISH_DIGIT_WORD_RE =
+  /\b(?:zero|oh|o|one|two|three|four|five|six|seven|eight|nine)(?:[\s,.\-_/]+(?:zero|oh|o|one|two|three|four|five|six|seven|eight|nine)){9,}\b/gi;
+const DOT_WORD_EMAIL_RE =
+  /\b[A-Za-z0-9]+(?:\s+(?:dot|period|점|닷|쩜)\s+[A-Za-z0-9]+)*\s+(?:at|앳|골뱅이)\s+[A-Za-z0-9]+(?:\s+(?:dot|period|점|닷|쩜)\s+[A-Za-z]{2,})+\b/gi;
+const CONTEXTUAL_DIGIT_PHRASE_RE =
+  /(?:주민번호|주민등록|RRN|신원|KYC|생년월일|뒤\s*7\s*자리|계좌(?:번호)?|은행|카드(?:번호)?|신용카드|휴대폰|핸드폰|전화|연락처)[^\n]{0,96}/gi;
+
+const UNICODE_DIGITS: Record<string, string> = {
+  '０': '0',
+  '１': '1',
+  '２': '2',
+  '３': '3',
+  '４': '4',
+  '５': '5',
+  '６': '6',
+  '７': '7',
+  '８': '8',
+  '９': '9',
+  '⓪': '0',
+  '①': '1',
+  '②': '2',
+  '③': '3',
+  '④': '4',
+  '⑤': '5',
+  '⑥': '6',
+  '⑦': '7',
+  '⑧': '8',
+  '⑨': '9',
+  零: '0',
+  〇: '0',
+  一: '1',
+  二: '2',
+  三: '3',
+  四: '4',
+  五: '5',
+  六: '6',
+  七: '7',
+  八: '8',
+  九: '9',
+};
+
+const ENGLISH_DIGITS: Record<string, string> = {
+  zero: '0',
+  oh: '0',
+  o: '0',
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+};
+
+const TYPE_CONTEXT: Record<PIIType, RegExp> = {
+  rrn: /주민|주민등록|RRN|신원|KYC|생년월일|뒤\s*7\s*자리/i,
+  bank_acct: /계좌|은행|입금|송금|이체|잔액|bank|account/i,
+  phone_kr: /휴대폰|핸드폰|전화|연락처|SMS|알림|phone|mobile|tel/i,
+  credit_card: /카드|신용카드|결제|자동결제/i,
+  email: /이메일|email|메일|주소/i,
+  demographic: /거주|사는|여성|남성|직장인|다니는|나이|프로필/i,
+};
 
 export interface LlmGuardOptions {
   /** Stage 1 detections — used for escalation gating */
@@ -154,6 +226,11 @@ export function shouldSkipStage2(
 export function hasStage2EscalationHint(text: string): boolean {
   return (
     hasKoreanNumeralSequenceHint(text) ||
+    hasAdvancedEncodingHint(text) ||
+    hasUnicodeDigitHint(text) ||
+    hasDelimitedPiiPhraseHint(text) ||
+    hasDotWordEmailHint(text) ||
+    hasEnglishDigitSequenceHint(text) ||
     /역순|거꾸로|뒤집/.test(text) ||
     /(?:^|[^가-힣])[가-힣]씨(?:\s|$|[^가-힣])/.test(text) ||
     /\d+\s*(년생|세|살|대)/.test(text) ||
@@ -161,6 +238,46 @@ export function hasStage2EscalationHint(text: string): boolean {
     /다니는|근무|거주/.test(text) ||
     /[a-zA-Z]\s[a-zA-Z]\s[a-zA-Z]\s*[.@]/.test(text)
   );
+}
+
+function hasAdvancedEncodingHint(text: string): boolean {
+  URL_ENCODED_RE.lastIndex = 0;
+  return ZERO_WIDTH_RE.test(text) || hasPlausibleBase64Token(text) || URL_ENCODED_RE.test(text);
+}
+
+function hasPlausibleBase64Token(text: string): boolean {
+  BASE64_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = BASE64_RE.exec(text)) !== null) {
+    const raw = match[0];
+    if (!looksLikeBase64(raw)) continue;
+    const decoded = decodeBase64(raw);
+    if (decoded && firstDetectedType(decoded)) return true;
+  }
+  return false;
+}
+
+function hasUnicodeDigitHint(text: string): boolean {
+  return /[０-９⓪①②③④⑤⑥⑦⑧⑨零〇一二三四五六七八九]/.test(text);
+}
+
+function hasDelimitedPiiPhraseHint(text: string): boolean {
+  CONTEXTUAL_DIGIT_PHRASE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CONTEXTUAL_DIGIT_PHRASE_RE.exec(text)) !== null) {
+    if ((match[0].match(/\d/g) ?? []).length >= 2) return true;
+  }
+  return false;
+}
+
+function hasDotWordEmailHint(text: string): boolean {
+  DOT_WORD_EMAIL_RE.lastIndex = 0;
+  return DOT_WORD_EMAIL_RE.test(text);
+}
+
+function hasEnglishDigitSequenceHint(text: string): boolean {
+  ENGLISH_DIGIT_WORD_RE.lastIndex = 0;
+  return ENGLISH_DIGIT_WORD_RE.test(text);
 }
 
 function hasKoreanNumeralSequenceHint(text: string): boolean {
@@ -187,7 +304,17 @@ export async function llmDetect(
     return [];
   }
 
-  const model = getLlm();
+  const contextual = localContextualDetect(text);
+  if (contextual.length > 0 && process.env.PII_GUARD_STAGE2_LLM_ALWAYS !== '1') {
+    return contextual;
+  }
+
+  let model: ChatOpenAI;
+  try {
+    model = getLlm();
+  } catch {
+    return contextual;
+  }
   let raw: string | null = null;
 
   for (let attempt = 0; attempt < 2 && raw === null; attempt++) {
@@ -239,7 +366,210 @@ export async function llmDetect(
     });
   }
 
+  return dedupeOverlapping([...contextual, ...out]);
+}
+
+export function contextualDetectSync(text: string): PIIDetection[] {
+  if (!hasStage2EscalationHint(text)) return [];
+  return localContextualDetect(text);
+}
+
+function localContextualDetect(text: string): PIIDetection[] {
+  return dedupeOverlapping([
+    ...detectEncodedTokens(text),
+    ...detectUnicodeDigitSequences(text),
+    ...detectDelimitedPiiPhrases(text),
+    ...detectDotWordEmails(text),
+    ...detectEnglishDigitSequences(text),
+  ]);
+}
+
+function detectEncodedTokens(text: string): PIIDetection[] {
+  return dedupeOverlapping([
+    ...detectBase64Tokens(text),
+    ...detectUrlEncodedTokens(text),
+  ]);
+}
+
+function detectBase64Tokens(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  BASE64_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = BASE64_RE.exec(text)) !== null) {
+    const raw = match[0];
+    if (!looksLikeBase64(raw)) continue;
+    if (raw.length % 4 === 1) continue;
+    const decoded = decodeBase64(raw);
+    if (!decoded) continue;
+    const type =
+      classifyDigits(decoded.replace(/\D/g, ''), contextWindow(text, match.index, match.index + raw.length)) ??
+      firstDetectedType(decoded);
+    if (!type) continue;
+    out.push(buildDetection(type, match.index, match.index + raw.length, raw, 0.94));
+  }
   return out;
+}
+
+function detectUrlEncodedTokens(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  URL_ENCODED_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = URL_ENCODED_RE.exec(text)) !== null) {
+    const raw = match[0];
+    const decoded = safeDecodeURIComponent(raw);
+    if (!decoded || decoded === raw) continue;
+    const type =
+      classifyDigits(decoded.replace(/\D/g, ''), contextWindow(text, match.index, match.index + raw.length)) ??
+      firstDetectedType(decoded);
+    if (!type) continue;
+    out.push(buildDetection(type, match.index, match.index + raw.length, raw, 0.94));
+  }
+  return out;
+}
+
+function detectUnicodeDigitSequences(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  UNICODE_DIGITISH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = UNICODE_DIGITISH_RE.exec(text)) !== null) {
+    const raw = trimDecorativeSeparators(match[0]);
+    if (!raw) continue;
+    const digits = normalizeUnicodeDigits(raw);
+    if (digits.length < 10) continue;
+    const ctx = contextWindow(text, match.index, match.index + raw.length);
+    const type = classifyDigits(digits, ctx);
+    if (!type) continue;
+    out.push(buildDetection(type, match.index, match.index + raw.length, raw, 0.92));
+  }
+  return out;
+}
+
+function detectDelimitedPiiPhrases(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  CONTEXTUAL_DIGIT_PHRASE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CONTEXTUAL_DIGIT_PHRASE_RE.exec(text)) !== null) {
+    const segment = match[0];
+    const digitMatches = [...segment.matchAll(/\d{2,}/g)];
+    if (digitMatches.length === 0) continue;
+    const digits = digitMatches.map((m) => m[0]).join('');
+    if (digits.length < 10) continue;
+    const type = classifyDigits(digits, segment);
+    if (!type) continue;
+
+    const first = digitMatches[0];
+    const last = digitMatches[digitMatches.length - 1];
+    const firstIndex = first.index;
+    const lastIndex = last.index;
+    if (firstIndex === undefined || lastIndex === undefined) continue;
+    const start = match.index + firstIndex;
+    const end = match.index + lastIndex + last[0].length;
+    const raw = trimDecorativeSeparators(text.slice(start, end));
+    out.push(buildDetection(type, start, start + raw.length, raw, 0.9));
+  }
+  return out;
+}
+
+function detectDotWordEmails(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  DOT_WORD_EMAIL_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = DOT_WORD_EMAIL_RE.exec(text)) !== null) {
+    const raw = match[0];
+    const normalized = raw
+      .replace(/\s+(?:at|앳|골뱅이)\s+/gi, '@')
+      .replace(/\s+(?:dot|period|점|닷|쩜)\s+/gi, '.')
+      .replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(normalized)) continue;
+    out.push(buildDetection('email', match.index, match.index + raw.length, raw, 0.93));
+  }
+  return out;
+}
+
+function detectEnglishDigitSequences(text: string): PIIDetection[] {
+  const out: PIIDetection[] = [];
+  ENGLISH_DIGIT_WORD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ENGLISH_DIGIT_WORD_RE.exec(text)) !== null) {
+    const raw = match[0];
+    const digits = raw
+      .toLowerCase()
+      .split(/[\s,.\-_/]+/)
+      .map((token) => ENGLISH_DIGITS[token] ?? '')
+      .join('');
+    if (digits.length < 10) continue;
+    const ctx = contextWindow(text, match.index, match.index + raw.length);
+    const type = classifyDigits(digits, ctx);
+    if (!type) continue;
+    out.push(buildDetection(type, match.index, match.index + raw.length, raw, 0.91));
+  }
+  return out;
+}
+
+function firstDetectedType(decoded: string): PIIType | null {
+  const regex = regexDetect(decoded);
+  if (regex.length > 0) return regex[0].type;
+  const digits = decoded.replace(/\D/g, '');
+  return classifyDigits(digits, decoded);
+}
+
+function classifyDigits(digits: string, ctx: string): PIIType | null {
+  if (/^01[016789]\d{7,8}$/.test(digits)) return 'phone_kr';
+  if (/^\d{6}[1-4]\d{6}$/.test(digits)) return 'rrn';
+  if (TYPE_CONTEXT.rrn.test(ctx) && digits.length === 13) return 'rrn';
+  if (TYPE_CONTEXT.phone_kr.test(ctx) && digits.length >= 10 && digits.length <= 11) return 'phone_kr';
+  if (TYPE_CONTEXT.bank_acct.test(ctx) && digits.length >= 10 && digits.length <= 14) return 'bank_acct';
+  if (TYPE_CONTEXT.credit_card.test(ctx) && digits.length >= 13 && digits.length <= 19) return 'credit_card';
+  return null;
+}
+
+function normalizeUnicodeDigits(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    if (UNICODE_DIGITS[ch] !== undefined) out += UNICODE_DIGITS[ch];
+    else if (/\d/.test(ch)) out += ch;
+  }
+  return out;
+}
+
+function decodeBase64(value: string): string | null {
+  try {
+    const decoded = Buffer.from(value, 'base64').toString('utf8');
+    if (!decoded || /[\u0000-\u0008\u000E-\u001F]/.test(decoded)) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeBase64(value: string): boolean {
+  return /[A-Za-z+/]/.test(value) && value.length >= 12;
+}
+
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function buildDetection(
+  type: PIIType,
+  start: number,
+  end: number,
+  match: string,
+  confidence: number,
+): PIIDetection {
+  return { type, start, end, match, confidence };
+}
+
+function contextWindow(text: string, start: number, end: number): string {
+  return text.slice(Math.max(0, start - 32), Math.min(text.length, end + 32));
+}
+
+function trimDecorativeSeparators(value: string): string {
+  return value.replace(/^[\s,，、.:：;；/／·・－-]+|[\s,，、.:：;；/／·・－-]+$/g, '');
 }
 
 function normalizeType(raw: string | undefined): PIIType | null {

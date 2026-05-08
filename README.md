@@ -81,8 +81,9 @@ Stage 1 — Regex      (deterministic, ~1ms)
 Stage 1.5 — Normalizer
    │ 한글 수사 / 역순 / spaced email / DEMOGRAPHIC 패턴을 LLM 없이 탐지
    ▼ 미감지 + 난독화 hint 발견
-Stage 2 — LLM Guard  (gpt-4o-mini, ~2s, 17% 입력만 도달)
-   │ 애매한 문맥 / 고위험 난독화 보조 판정
+Stage 2 — Contextual Guard + LLM adjudication
+   │ 인코딩/유니코드/자연어 분할/영문·중문 숫자 hardcase 우선 정규화
+   │ 남은 애매한 문맥은 LLM adjudication
    ▼ 마스킹된 입력
 Dexter Agent
    │
@@ -122,8 +123,9 @@ Stage 3 Span Processor (Phoenix 송출 직전 last line of defense)
 | **F1** | **1.000** | ≥ 0.87 ✓ |
 | Obfuscated Recall | **1.000** | ≥ 0.70 ✓ |
 | Output Guard cross-session | **15/15 차단** | 100% |
-| Latency mean | 477ms | (LLM-bound) |
-| Latency p50 | 0ms | (83% 입력 즉시 처리) |
+| Stage2-only hardcases | **30/30 차단** | Stage1/1.5 탐지 0건, Stage2 추가 30건 |
+| Base eval latency p95 | 1ms | 100건 기준 |
+| Stage2 hardcase latency p95 | 1ms | 30건 기준 |
 
 ```
 Category         n   TP  PART  FN  FP  TN
@@ -157,6 +159,7 @@ bun run scripts/compare-evals.ts <baseline> <improved>       # 비교 리포트
 # Sanity check
 bun run scripts/check-stage1.ts                       # Stage 1 단독 (deterministic)
 bun run scripts/check-stage2.ts                       # Stage 1+2 통합
+bun run scripts/check-stage2.ts --stage2-hard         # Stage 2-only hardcase 30건
 bun test src/observability/guards/piiGuard.test.ts    # Orchestrator deterministic regression
 bun run scripts/check-stage2.ts --obf                 # obfuscated 20건만
 bun run scripts/check-output-guard.ts                 # Output Guard 7-case
@@ -164,6 +167,7 @@ bun run scripts/check-output-guard.ts                 # Output Guard 7-case
 # 전체 평가 (Phoenix trace 생성 포함)
 bun run scripts/run-pii-evals.ts                      # 100건 → JSONL + trace
 bun run scripts/run-pii-evals.ts --category obfuscated  # 카테고리 부분 평가
+bun run scripts/run-pii-evals.ts --stage2-hard        # Stage2 hardcase JSONL + trace
 
 # Week 1 평가 시 PII Guard 우회 (12자리 매출 숫자 오탐 방지)
 PII_GUARD_DISABLED=1 bun run scripts/run-evals.ts
@@ -234,7 +238,8 @@ bun run scripts/build-dashboard.ts --serve --port 8080
 │       │   └── outputGuard.ts             # Output Guard — cross-session leak 차단
 │       └── datasets/
 │           ├── hallucination_50q.json     # Week 1 — 50문항 (Easy/Medium/Hard/Trap)
-│           └── pii_100samples.json        # Week 2 — 100건 (5종 카테고리)
+│           ├── pii_100samples.json        # Week 2 — 100건 (5종 카테고리)
+│           └── pii_stage2_hardcases.json  # Stage 2 — 30건 hardcase red-team set
 │
 ├── scripts/
 │   ├── phoenix-smoketest.ts               # Phoenix 연결 검증

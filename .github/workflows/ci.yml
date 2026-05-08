@@ -18,6 +18,10 @@ jobs:
             command: bun run typecheck
           - task: test
             command: bun test
+          - task: pii-stage2-hard
+            command: bun run scripts/check-stage2.ts --stage2-hard
+          - task: pii-output-guard
+            command: bun run scripts/check-output-guard.ts
     steps:
       - uses: actions/checkout@v4
 

@@ -759,7 +759,7 @@ function colorFor(outcome) {
 
 // ---- Chart 3: Obfuscation pattern stage contribution ----
 {
-  const patterns = ['korean_numerals', 'spaced', 'special_char_insertion', 'reversed', 'contextual_inference'];
+  const patterns = Array.from(new Set(ROWS.map(r => r.obfuscation_pattern).filter(Boolean)));
   const stage1 = patterns.map(p => ROWS.filter(r => r.obfuscation_pattern === p).reduce((s, r) => s + (r.detections.stage1?.length ?? 0), 0));
   const stage2 = patterns.map(p => ROWS.filter(r => r.obfuscation_pattern === p).reduce((s, r) => s + (r.detections.stage2?.length ?? 0), 0));
   new Chart(document.getElementById('chart-obfuscation'), {

@@ -6,7 +6,7 @@ import {
   type PIIDetection,
   type PIIType,
 } from './regexGuard.js';
-import { hasStage2EscalationHint, llmDetect } from './llmGuard.js';
+import { contextualDetectSync, hasStage2EscalationHint, llmDetect } from './llmGuard.js';
 
 export type PiiGuardAction = 'allow' | 'mask' | 'block';
 export type PiiGuardDirection = 'input' | 'output' | 'trace' | 'storage' | 'log';
@@ -190,7 +190,11 @@ export async function guardText(
 
 export function detectPiiSync(text: string): PIIDetection[] {
   if (isGuardDisabled()) return [];
-  return dedupeOverlapping([...regexDetect(text), ...deterministicDetect(text)]);
+  return dedupeOverlapping([
+    ...regexDetect(text),
+    ...deterministicDetect(text),
+    ...contextualDetectSync(text),
+  ]);
 }
 
 export function maskSensitiveTextSync(text: string): string {
