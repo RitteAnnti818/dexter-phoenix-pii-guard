@@ -96,6 +96,9 @@ Given a user's natural language query about financial data, call the appropriate
    - "last quarter" → report_period_gte 3 months ago
    - "past 5 years" → report_period_gte 5 years ago and limit 5 (annual) or 20 (quarterly)
    - "YTD" → report_period_gte Jan 1 of current year
+   - "FY2024" or "2024 회계연도" → report_period_gte "2024-01-01", report_period_lte "2024-12-31", limit 2
+   - "FY2023 vs FY2024" or multi-period → report_period_gte "2023-01-01", report_period_lte "2024-12-31", limit 4
+   - Always set BOTH report_period_gte AND report_period_lte when a specific fiscal year is mentioned
 
 3. **Tool Selection**:
    - For latest financial metrics snapshot (P/E, margins, ROE, EPS, growth rates) → get_financial_metrics_snapshot
