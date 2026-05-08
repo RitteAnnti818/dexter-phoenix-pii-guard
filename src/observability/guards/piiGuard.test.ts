@@ -51,6 +51,39 @@ describe('piiGuard deterministic detection', () => {
   });
 });
 
+describe('piiGuard Stage 2 hardening', () => {
+  test('detects base64-encoded PII as a Stage 2-only case', async () => {
+    const result = await guardInput('휴대폰 MDEwLTEyMzQtNTY3OA== 로 알림 보내줘');
+
+    expect(result.maskedText).toBe('휴대폰 [REDACTED_PHONE_KR] 로 알림 보내줘');
+    expect(maskSensitiveTextSync('휴대폰 MDEwLTEyMzQtNTY3OA== 로 알림 보내줘'))
+      .toBe('휴대폰 [REDACTED_PHONE_KR] 로 알림 보내줘');
+    expect(result.stageDetections.stage1).toHaveLength(0);
+    expect(result.stageDetections.deterministic).toHaveLength(0);
+    expect(result.stageDetections.stage2).toHaveLength(1);
+    expect(result.stageStats.stage2Used).toBe(true);
+  });
+
+  test('detects natural-language segmented identifiers in Stage 2', async () => {
+    const result = await guardInput('주민번호는 생년월일 901231, 뒤 7자리는 1234567 로 분석');
+
+    expect(result.maskedText).toBe('주민번호는 생년월일 [REDACTED_RRN] 로 분석');
+    expect(result.stageDetections.stage1).toHaveLength(0);
+    expect(result.stageDetections.deterministic).toHaveLength(0);
+    expect(result.stageDetections.stage2[0]?.type).toBe('rrn');
+  });
+
+  test('detects dot-word email and unicode digit bypasses in Stage 2', async () => {
+    const email = await guardInput('이메일 hong dot gd at example dot com 으로 등록');
+    const phone = await guardInput('전화 零一零 一二三四 五六七八로 알림 보내줘');
+
+    expect(email.maskedText).toBe('이메일 [REDACTED_EMAIL] 으로 등록');
+    expect(email.stageDetections.stage2[0]?.type).toBe('email');
+    expect(phone.maskedText).toBe('전화 [REDACTED_PHONE_KR]로 알림 보내줘');
+    expect(phone.stageDetections.stage2[0]?.type).toBe('phone_kr');
+  });
+});
+
 describe('piiGuard fingerprints', () => {
   test('normalizes Korean numerals before fingerprinting', () => {
     expect(normalizePii('공일공-일이삼사-오륙칠팔')).toBe('01012345678');
