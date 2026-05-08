@@ -9,6 +9,8 @@
  *   bun run scripts/run-pii-evals.ts --ids P066,P081  # specific rows
  *   bun run scripts/run-pii-evals.ts --category obfuscated
  *   bun run scripts/run-pii-evals.ts --stage2-hard    # Stage 2-only hardcases
+ *   bun run scripts/run-pii-evals.ts --finance        # finance benchmark rows
+ *   bun run scripts/run-pii-evals.ts --all-pii        # base + hardcase + finance
  *
  * Writes JSONL report to .dexter/pii-evals/<timestamp>.jsonl.
  * Each row emits a Phoenix trace (project: dexter) tagged with category,
@@ -30,6 +32,12 @@ import { guardInput } from '../src/observability/guards/piiGuard.js';
 
 const DEFAULT_DATASET_PATH = 'src/observability/datasets/pii_100samples.json';
 const STAGE2_HARD_DATASET_PATH = 'src/observability/datasets/pii_stage2_hardcases.json';
+const FINANCE_DATASET_PATH = 'src/observability/datasets/pii_finance_170samples.json';
+const ALL_PII_DATASET_PATHS = [
+  DEFAULT_DATASET_PATH,
+  STAGE2_HARD_DATASET_PATH,
+  FINANCE_DATASET_PATH,
+];
 const ATTR_MAX_LEN = 4000;
 const truncate = (s: string, n = ATTR_MAX_LEN) => (s.length > n ? `${s.slice(0, n)}...` : s);
 
@@ -48,6 +56,10 @@ interface Row {
   expected_response_blocks_pii?: boolean;
   injection_type?: string;
   stage2_only?: boolean;
+  vertical?: string;
+  sensitivity_class?: string;
+  source_basis?: string;
+  language?: string;
 }
 
 interface CliArgs {
@@ -55,6 +67,7 @@ interface CliArgs {
   ids?: string[];
   category?: Row['category'];
   dataset?: string;
+  datasets?: string[];
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -64,8 +77,22 @@ function parseArgs(argv: string[]): CliArgs {
     if (a === '--limit') out.limit = Number.parseInt(argv[++i] ?? '', 10);
     else if (a === '--ids') out.ids = (argv[++i] ?? '').split(',').filter(Boolean);
     else if (a === '--category') out.category = argv[++i] as Row['category'];
-    else if (a === '--dataset') out.dataset = argv[++i];
-    else if (a === '--stage2-hard') out.dataset = STAGE2_HARD_DATASET_PATH;
+    else if (a === '--dataset') {
+      out.dataset = argv[++i];
+      out.datasets = undefined;
+    }
+    else if (a === '--stage2-hard') {
+      out.dataset = STAGE2_HARD_DATASET_PATH;
+      out.datasets = undefined;
+    }
+    else if (a === '--finance') {
+      out.dataset = undefined;
+      out.datasets = [FINANCE_DATASET_PATH];
+    }
+    else if (a === '--all-pii') {
+      out.dataset = undefined;
+      out.datasets = ALL_PII_DATASET_PATHS;
+    }
   }
   return out;
 }
@@ -90,9 +117,13 @@ interface RowReport {
   requires_stage?: 1 | 2;
   injection_type?: string;
   stage2_only?: boolean;
+  vertical?: string;
+  sensitivity_class?: string;
+  language?: string;
   input: string;
   expected_masked: string;
   actual_masked: string;
+  expected_types: string[];
   detections: {
     stage1: { type: PIIType; match: string; confidence: number }[];
     deterministic: { type: PIIType; match: string; confidence: number }[];
@@ -157,9 +188,13 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
       'pii.dataset.id': row.id,
       'pii.dataset.category': row.category,
       'pii.dataset.contains_pii': row.contains_pii,
+      'pii.expected_types': row.pii_types.join(','),
       ...(row.obfuscation_pattern && { 'pii.obfuscation_pattern': row.obfuscation_pattern }),
       ...(row.requires_stage && { 'pii.requires_stage': row.requires_stage }),
       ...(row.injection_type && { 'pii.injection_type': row.injection_type }),
+      ...(row.vertical && { 'pii.finance.vertical': row.vertical }),
+      ...(row.sensitivity_class && { 'pii.sensitivity_class': row.sensitivity_class }),
+      ...(row.language && { 'pii.dataset.language': row.language }),
     },
   });
 
@@ -188,9 +223,13 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     requires_stage: row.requires_stage,
     injection_type: row.injection_type,
     stage2_only: row.stage2_only,
+    vertical: row.vertical,
+    sensitivity_class: row.sensitivity_class,
+    language: row.language,
     input: actualMasked,
     expected_masked: row.expected_masked,
     actual_masked: actualMasked,
+    expected_types: row.pii_types,
     detections: {
       stage1: [...stage1, ...deterministic].map(detectionSummary),
       deterministic: deterministic.map(detectionSummary),
@@ -288,17 +327,41 @@ function outputGuardBreakdown(reports: RowReport[]) {
   return { n: tested.length, blocked, leaked };
 }
 
+function optionalFieldBreakdown(reports: RowReport[], field: 'vertical' | 'sensitivity_class') {
+  const keys = [...new Set(reports.map((r) => r[field]).filter(Boolean))] as string[];
+  return keys.sort().map((key) => {
+    const subset = reports.filter((r) => r[field] === key);
+    const c = { TP: 0, FP: 0, FN: 0, TN: 0, PARTIAL: 0 };
+    for (const r of subset) c[r.outcome]++;
+    return { key, n: subset.length, ...c };
+  });
+}
+
+function expectedTypeBreakdown(reports: RowReport[]) {
+  const types = [...new Set(reports.flatMap((r) => r.expected_types))].sort();
+  return types.map((type) => {
+    const subset = reports.filter((r) => r.expected_types.includes(type));
+    const c = { TP: 0, FP: 0, FN: 0, TN: 0, PARTIAL: 0 };
+    for (const r of subset) c[r.outcome]++;
+    return { type, n: subset.length, ...c };
+  });
+}
+
 function pad(n: number | string, w: number): string {
   return String(n).padStart(w);
 }
 
 async function main() {
   const args = parseArgs(process.argv);
-  const datasetPath = args.dataset ?? DEFAULT_DATASET_PATH;
-  const all = JSON.parse(await Bun.file(datasetPath).text()) as Row[];
+  const datasetPaths = args.datasets ?? [args.dataset ?? DEFAULT_DATASET_PATH];
+  const all = (
+    await Promise.all(
+      datasetPaths.map(async (path) => JSON.parse(await Bun.file(path).text()) as Row[]),
+    )
+  ).flat();
   const rows = selectRows(all, args);
 
-  console.error(`[pii-evals] dataset=${datasetPath}`);
+  console.error(`[pii-evals] dataset=${datasetPaths.join(',')}`);
   console.error(`[pii-evals] running ${rows.length}/${all.length} rows...`);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -339,6 +402,22 @@ async function main() {
   for (const b of categoryBreakdown(reports)) {
     if (b.n === 0) continue;
     console.log(`${b.cat.padEnd(16)} ${pad(b.n, 2)}  ${pad(b.TP ?? 0, 2)}  ${pad(b.PARTIAL ?? 0, 4)}  ${pad(b.FN ?? 0, 2)}  ${pad(b.FP ?? 0, 2)}  ${pad(b.TN ?? 0, 2)}`);
+  }
+
+  const verticalBreakdown = optionalFieldBreakdown(reports, 'vertical');
+  if (verticalBreakdown.length > 0) {
+    console.log('\nFinance vertical       n   TP  PART  FN  FP  TN');
+    for (const b of verticalBreakdown) {
+      console.log(`${b.key.padEnd(22)} ${pad(b.n, 2)}  ${pad(b.TP, 2)}  ${pad(b.PARTIAL, 4)}  ${pad(b.FN, 2)}  ${pad(b.FP, 2)}  ${pad(b.TN, 2)}`);
+    }
+  }
+
+  const typeBreakdown = expectedTypeBreakdown(reports);
+  if (typeBreakdown.length > 0) {
+    console.log('\nExpected PII type       n   TP  PART  FN');
+    for (const b of typeBreakdown) {
+      console.log(`${b.type.padEnd(22)} ${pad(b.n, 2)}  ${pad(b.TP, 2)}  ${pad(b.PARTIAL, 4)}  ${pad(b.FN, 2)}`);
+    }
   }
 
   const obfRows = reports.filter((r) => r.category === 'obfuscated');
