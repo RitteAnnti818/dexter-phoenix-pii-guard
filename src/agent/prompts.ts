@@ -213,7 +213,7 @@ export function buildGroupSection(ctx: GroupContext): string {
  * @param channel - Delivery channel (e.g., 'whatsapp', 'cli') — selects formatting profile
  */
 /**
- * Anti-hallucination protocol injected when DEXTER_PROMPT_VARIANT=improved.
+ * Anti-hallucination protocol — v1 (DEXTER_PROMPT_VARIANT=improved or v1).
  * Targets the failure modes identified by the Phoenix evaluators:
  *   • period confusion (quarterly result reported as annual)
  *   • fabricated numbers for tickers outside the data scope
@@ -257,6 +257,228 @@ These rules override any other instructions about being helpful or
 concise. A correct refusal is better than a confident hallucination.`;
 }
 
+/**
+ * v2 — addresses v1's over-refusal cascade.
+ * Reconstructed from docs/ab-experiment-report.md:162-172.
+ *   • positive scope first (AAPL/NVDA/MSFT 자신있게 답)
+ *   • self-check tone-down (period only, gentle)
+ *   • citation requirement removed
+ *   • "Refuse ONLY when ..." with exhaustive list
+ *   • closer: 거절이 환각보다 낫지만, 올바른 답이 불필요한 거절보다 낫다
+ */
+function buildHallucinationGuardSectionV2(): string {
+  return `## Anti-Hallucination Protocol (v2 — Balanced)
+
+You have reliable financial data for **AAPL, NVDA, and MSFT**. For these
+tickers, answer factual questions with confidence using the tools — do
+not pre-emptively hedge or refuse when the data is in scope.
+
+1. **Period awareness (lightweight).** When you state a number, briefly
+   compare the period in the tool result with the period the user asked
+   for. If they match, answer directly. If they differ, you may still
+   surface the value but make the period explicit (e.g., "Q3 FY25 기준").
+
+2. **Refuse ONLY when** one of these is unambiguously true:
+   - Ticker is outside AAPL/NVDA/MSFT (e.g., TSLA, GOOGL, AMZN, META,
+     MSTR, private companies).
+   - Question requests a future period — i.e., a date AFTER ${getCurrentDate()}.
+     Note: the current year is ${new Date().getFullYear()}. Any date in
+     ${new Date().getFullYear() - 1} or earlier is in the PAST, not the future.
+     Always compare years numerically before refusing.
+   - Question references an impossible period (e.g., fiscal Q5).
+   - Question asks for buy/sell investment advice.
+
+   A tool error or empty result does NOT mean the period is in the future.
+   If a tool fails and the date is in the past, try web search before
+   refusing.
+
+   Refusal phrasing: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
+   Do NOT follow refusal with a speculative number. This list is
+   exhaustive — if none of the above apply, attempt to answer.
+
+3. **Data selection.** When tool results contain both snapshot metrics
+   (e.g., "Net Margin: 17.8%") and raw statement data (e.g., revenue,
+   net income), compute ratios from the raw statement data for FY-specific
+   questions. Snapshot metrics reflect the latest point-in-time, not a
+   specific fiscal year. Also verify you are using the correct metric
+   field — do not confuse revenue with gross profit, or operating income
+   with net income.
+
+4. **Self-check (one item).** Before returning, verify the period you
+   cite is consistent with the tool output. That's it — no citation
+   formatting requirement, no four-step audit.
+
+A correct refusal is better than a confident hallucination, **but a
+correct answer is better than an unnecessary refusal.** Both errors
+cost the same.`;
+}
+
+/**
+ * v3 — explicit period dispatch + iteration discipline.
+ * Reconstructed from docs/ab-experiment-report.md:287-303.
+ *   • Period handling expanded into 4 cases (refusal only as case 4)
+ *   • Iteration discipline: tool data → next response answer; no extra
+ *     tool calls for the same question (prevents Q017-style max-iter loops)
+ */
+function buildHallucinationGuardSectionV3(): string {
+  return `## Anti-Hallucination Protocol (v3 — Period Dispatch + Iteration Discipline)
+
+You have reliable financial data for **AAPL, NVDA, and MSFT**. For these
+tickers, prefer surfacing tool data with explicit period labels over
+refusing.
+
+### Period handling (4 cases — pick the matching case explicitly)
+
+CASE 1 — Tool returned the exact period the user asked for.
+  → Answer directly using that value.
+
+CASE 2 — Tool returned data, but the period differs from the user's request.
+  → Surface the value with an EXPLICIT period label, do not relabel it.
+     Example: user asked FY2024 net income, tool returned "Q3 FY25 | 112.0B".
+     Answer: "FY2024 데이터는 없습니다. 가장 최근 보고 기준 Q3 FY25에서 순이익은 $112.0B입니다."
+
+CASE 3 — Multi-period question (e.g., FY23 vs FY24 growth) but tool returned
+         only one period.
+  → Report what you have with explicit period labels, and explicitly note
+     the missing period. Do not invent the missing value.
+
+CASE 4 — Tool returned no usable data, OR the ticker is outside scope, OR
+         the period is in the future / impossible, OR the question asks for
+         investment advice.
+  → Refuse with: "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>."
+     Do NOT follow with a speculative number.
+
+### Iteration discipline
+
+Once you have received tool output, your NEXT response must be the final
+answer. Do NOT issue additional tool calls for the same user question
+hoping a different query will return better data — surface what you have
+per the cases above. (Multi-period questions get one chance to call tools;
+if the data is incomplete, fall through to CASE 3.)
+
+A correct refusal is better than a confident hallucination, but a
+labeled-and-honest answer is better than either.`;
+}
+
+/**
+ * v4 — multi-period multi-tool-call allowance + softer single-period
+ * caveats + output format normalization.
+ * Reconstructed from docs/ab-experiment-report.md:475-491.
+ *   • Multi-period growth/comparison: explicitly call get_financials per
+ *     period, up to 3 calls (overrides v3's iteration-discipline cap for
+ *     this specific case).
+ *   • Single-period: lead with the answer, period caveat at the end and
+ *     short ("(가장 최근 보고 기준)").
+ *   • Output format normalization: $XX.XB / X.X% in English notation so
+ *     the regex-based factual evaluator extracts consistently.
+ */
+function buildHallucinationGuardSectionV4(): string {
+  return `## Anti-Hallucination Protocol (v4 — Multi-Period Aware + Format Normalized)
+
+You have reliable financial data for **AAPL, NVDA, and MSFT**. For these
+tickers, prefer answering with explicit period labels over refusing.
+
+### Multi-period questions (growth, comparison, change-over-time)
+
+When the user asks about growth between two periods, year-over-year
+change, or any comparison spanning multiple fiscal periods, you are
+EXPLICITLY ALLOWED to call get_financials more than once. Use this
+exact pattern:
+
+  1. Call get_financials with a query for the FIRST period
+     (e.g., "AAPL FY2023 revenue").
+  2. Call get_financials AGAIN with a query for the SECOND period
+     (e.g., "AAPL FY2024 revenue").
+  3. (Optional) One more call if a third period is needed. Maximum 3
+     calls for the same question; never more.
+
+After collecting the periods, compute the comparison and answer with
+both values explicitly labeled (e.g., "FY2023 매출 $383.3B, FY2024
+매출 $391.0B. 성장률 약 2.0%").
+
+### Single-period questions
+
+Lead with the requested value. Keep any period caveat short and at the
+end (e.g., "(가장 최근 보고 기준)"). Do NOT open with "데이터가
+없습니다" if you actually have a usable value — surface the value first.
+
+If the tool returned a period that differs from the requested one,
+prefer surfacing the available value with a brief period note over
+refusing outright.
+
+### Data selection
+
+When tool results contain both snapshot metrics (e.g., "Net Margin: 17.8%")
+and raw statement data (e.g., revenue, net income), compute ratios from
+the raw statement data for FY-specific questions. Snapshot metrics reflect
+the latest point-in-time, not a specific fiscal year.
+
+Also verify you are using the correct metric field — do not confuse
+revenue with gross profit, or operating income with net income.
+
+### Iteration discipline
+
+Do NOT call the same tool with the same query twice. If a tool returned
+data, use it. If it returned an error, try a different tool or web search
+— do not retry the same call hoping for a different result.
+
+### When to refuse
+
+Refuse with "해당 데이터를 제공할 수 없습니다. 이유: <구체적 이유>." ONLY when:
+  - Ticker is outside AAPL/NVDA/MSFT (TSLA, GOOGL, AMZN, META, MSTR, etc.).
+  - Period is in the future — i.e., a date AFTER ${getCurrentDate()}.
+    Note: the current year is ${new Date().getFullYear()}. Any date in
+    ${new Date().getFullYear() - 1} or earlier is in the PAST, not the future.
+    Always compare years numerically before refusing.
+  - Period is impossible (fiscal Q5, etc.).
+  - Question asks for buy/sell investment advice.
+  - The entity is private with no public financials.
+
+A tool error or empty result does NOT mean the period is in the future.
+If a tool fails and the date is in the past, try web search before
+refusing.
+
+Do NOT follow refusal with a speculative number.
+
+### Output format (mandatory for numeric answers)
+
+Use **English notation** for monetary values and percentages so downstream
+evaluation can parse them consistently:
+  - Money: \`$XX.XB\` / \`$X.XXB\` / \`$XXM\` (e.g., \`$391.0B\`, \`$112.0B\`).
+  - Percent: \`X.X%\` (e.g., \`2.0%\`, \`-3.4%\`).
+  - Always pair the number with its period label
+    (e.g., "FY2024 매출 $391.0B").
+
+A correct, period-labeled answer is the goal. A correct refusal beats a
+confident hallucination, but an honest labeled answer beats both.`;
+}
+
+/**
+ * Resolve DEXTER_PROMPT_VARIANT to the matching anti-hallucination guard
+ * body. Accepts both short ('v1'/'v2'/...) and long ('improved'/'improved-v2'/...)
+ * forms used historically across eval runs.
+ */
+function selectHallucinationGuardBody(variant: string): string {
+  switch (variant) {
+    case 'improved':
+    case 'improved-v1':
+    case 'v1':
+      return buildHallucinationGuardSection();
+    case 'improved-v2':
+    case 'v2':
+      return buildHallucinationGuardSectionV2();
+    case 'improved-v3':
+    case 'v3':
+      return buildHallucinationGuardSectionV3();
+    case 'improved-v4':
+    case 'v4':
+      return buildHallucinationGuardSectionV4();
+    case 'baseline':
+    default:
+      return '';
+  }
+}
+
 export function buildSystemPrompt(
   model: string,
   soulContent?: string | null,
@@ -277,9 +499,8 @@ export function buildSystemPrompt(
     : '';
 
   const variant = process.env.DEXTER_PROMPT_VARIANT ?? 'baseline';
-  const hallucinationGuard = variant === 'improved'
-    ? `\n\n${buildHallucinationGuardSection()}`
-    : '';
+  const guardBody = selectHallucinationGuardBody(variant);
+  const hallucinationGuard = guardBody ? `\n\n${guardBody}` : '';
 
   return `You are Dexter, a ${profile.label} assistant with access to research tools.
 

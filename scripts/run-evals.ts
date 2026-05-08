@@ -26,6 +26,14 @@ import {
 import { evaluateToolCorrectness } from '../src/observability/evaluators/toolCorrectness.js';
 import { evaluateRefusal } from '../src/observability/evaluators/refusal.js';
 import { evaluatePlanQuality } from '../src/observability/evaluators/planQuality.js';
+import {
+  JUDGE_PROMPT_VERSION,
+  resolvedJudgeModel,
+} from '../src/observability/evaluators/prompts.js';
+import {
+  buildAnnotations,
+  postSpanAnnotations,
+} from '../src/observability/phoenixClient.js';
 import type {
   AgentRunCapture,
   DatasetRow,
@@ -75,6 +83,8 @@ async function runOne(row: DatasetRow): Promise<AgentRunCapture> {
   const pendingTools = new Map<string, { name: string; args: Record<string, unknown> }>();
   let finalAnswer = '';
   let iterations = 0;
+  let agentSpanId: string | undefined;
+  let traceId: string | undefined;
 
   for await (const event of agent.run(row.question)) {
     switch (event.type) {
@@ -112,6 +122,8 @@ async function runOne(row: DatasetRow): Promise<AgentRunCapture> {
       case 'done':
         finalAnswer = event.answer ?? '';
         iterations = event.iterations ?? 0;
+        agentSpanId = event.agentSpanId;
+        traceId = event.traceId;
         break;
     }
   }
@@ -122,6 +134,8 @@ async function runOne(row: DatasetRow): Promise<AgentRunCapture> {
     thinking,
     toolCalls,
     iterations,
+    agentSpanId,
+    traceId,
   };
 }
 
@@ -134,6 +148,10 @@ interface RowReport {
   agentLatencySec: number;
   /** Prompt variant used by the agent — for A/B labeling in compare-evals. */
   promptVariant: string;
+  /** Judge model that scored this row — A/B runs must match. */
+  judgeModel: string;
+  /** Judge prompt rubric version — bumps when prompts.ts changes. */
+  judgePromptVersion: string;
   agent: AgentRunCapture;
   evaluations: {
     factualAccuracy: EvalResult | null;
@@ -185,6 +203,10 @@ async function main() {
   const all = JSON.parse(await Bun.file(DATASET_PATH).text()) as DatasetRow[];
   const rows = selectRows(all, args);
   console.error(`[evals] running ${rows.length}/${all.length} questions...`);
+  console.error(
+    `[evals] judge=${resolvedJudgeModel()} prompts=${JUDGE_PROMPT_VERSION} ` +
+    `agentVariant=${process.env.DEXTER_PROMPT_VARIANT ?? 'baseline'}`,
+  );
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const outDir = '.dexter/evals';
@@ -193,6 +215,7 @@ async function main() {
   const writer = Bun.file(outPath).writer();
 
   const reports: RowReport[] = [];
+  const pendingAnnotations: ReturnType<typeof buildAnnotations> = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     process.stderr.write(`[${i + 1}/${rows.length}] ${row.id} (${row.level}) — running... `);
@@ -208,11 +231,27 @@ async function main() {
         question: row.question,
         agentLatencySec,
         promptVariant: process.env.DEXTER_PROMPT_VARIANT ?? 'baseline',
+        judgeModel: resolvedJudgeModel(),
+        judgePromptVersion: JUDGE_PROMPT_VERSION,
         agent: run,
         evaluations,
       };
       reports.push(report);
       writer.write(`${JSON.stringify(report)}\n`);
+      // Stash annotations for a post-flush batch POST. Skip if the agent
+      // run produced no AGENT span (telemetry disabled, error before span
+      // start, etc.) — Phoenix rejects annotations without a span_id.
+      if (run.agentSpanId) {
+        pendingAnnotations.push(
+          ...buildAnnotations(run.agentSpanId, {
+            factual_accuracy: evaluations.factualAccuracy,
+            groundedness: evaluations.groundedness,
+            tool_call_correctness: evaluations.toolCorrectness,
+            refusal_appropriateness: evaluations.refusal,
+            plan_quality: evaluations.planQuality,
+          }),
+        );
+      }
       const fa = evaluations.factualAccuracy?.score;
       const gd = evaluations.groundedness.score;
       const tc = evaluations.toolCorrectness.score;
@@ -241,7 +280,28 @@ async function main() {
   }
   console.error(`\n[evals] wrote ${reports.length} rows → ${outPath}`);
 
+  // Flush spans BEFORE posting annotations — Phoenix rejects span_ids it
+  // hasn't ingested yet. flushTelemetry() shuts down the SDK so the OTLP
+  // batch goes out synchronously.
   await flushTelemetry();
+
+  if (process.env.PHOENIX_DISABLE_ANNOTATIONS === '1') {
+    console.error('[evals] PHOENIX_DISABLE_ANNOTATIONS=1 → skipping annotation POST');
+  } else if (pendingAnnotations.length === 0) {
+    console.error('[evals] no annotations to post (no agent span IDs captured)');
+  } else {
+    try {
+      await postSpanAnnotations(pendingAnnotations);
+      console.error(
+        `[evals] posted ${pendingAnnotations.length} annotations to Phoenix ` +
+        `(${reports.filter((r) => r.agent.agentSpanId).length} traces)`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[evals] WARNING: annotation POST failed — ${msg}`);
+      console.error('[evals] scores still saved to JSONL; Phoenix UI will not show them');
+    }
+  }
 }
 
 main().catch((err) => {

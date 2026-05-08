@@ -201,27 +201,22 @@ export async function llmDetect(
     if (!type) continue;
     if (typeof det.match !== 'string' || det.match.length === 0) continue;
 
-    // LLM-reported indices are unreliable. Find spans ourselves — every
-    // occurrence, since the same PII can repeat (e.g. "주민번호 X 입니다.
-    // 다시 X 확인 부탁드립니다.").
-    let from = 0;
-    while (from <= text.length) {
-      const start = text.indexOf(det.match, from);
-      if (start === -1) break; // hallucinated or no further match
-      const end = start + det.match.length;
-      const spanKey = `${type}:${start}:${end}`;
-      if (!seenSpans.has(spanKey)) {
-        seenSpans.add(spanKey);
-        out.push({
-          type,
-          start,
-          end,
-          match: det.match,
-          confidence: clampNumber(det.confidence ?? FALLBACK_CONFIDENCE),
-        });
-      }
-      from = end;
-    }
+    // LLM-reported indices are unreliable. Find span ourselves.
+    const start = text.indexOf(det.match);
+    if (start === -1) continue; // hallucinated match — skip
+
+    const end = start + det.match.length;
+    const spanKey = `${type}:${start}:${end}`;
+    if (seenSpans.has(spanKey)) continue;
+    seenSpans.add(spanKey);
+
+    out.push({
+      type,
+      start,
+      end,
+      match: det.match,
+      confidence: clampNumber(det.confidence ?? FALLBACK_CONFIDENCE),
+    });
   }
 
   return out;

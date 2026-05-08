@@ -25,42 +25,10 @@ import { MemoryManager } from '../memory/index.js';
 import { runMemoryFlush, shouldRunMemoryFlush } from '../memory/flush.js';
 import { resolveProvider } from '../providers.js';
 import { getTracer } from '../observability/telemetry.js';
-import { regexDetect, maskText, dedupeOverlapping } from '../observability/guards/regexGuard.js';
-import { llmDetect } from '../observability/guards/llmGuard.js';
-import { checkOutput } from '../observability/guards/outputGuard.js';
 
 // Cap span attribute string size — Phoenix UI struggles with multi-MB blobs.
 const SPAN_ATTR_MAX_LEN = 4000;
 const truncate = (s: string, n = SPAN_ATTR_MAX_LEN) => (s.length > n ? `${s.slice(0, n)}...` : s);
-
-// Run Stage 1 + Stage 2 (with internal gating) and return masked text.
-// PII_GUARD_DISABLED=1 bypasses entirely — used by Week 1 evaluation runs
-// where 12-digit revenue numbers might trip BANK_ACCT regex.
-async function maskUserInput(text: string): Promise<string> {
-  if (process.env.PII_GUARD_DISABLED === '1') return text;
-  try {
-    const stage1 = regexDetect(text);
-    const stage2 = await llmDetect(text, { stage1Detections: stage1 });
-    const detections = dedupeOverlapping([...stage1, ...stage2]);
-    return detections.length > 0 ? maskText(text, detections) : text;
-  } catch {
-    return text;
-  }
-}
-
-// Run the Output Guard on the agent's final answer.
-// Returns the masked answer (or a refusal placeholder if a cross-session
-// memory leak was detected).
-async function maskAgentOutput(text: string): Promise<string> {
-  if (process.env.PII_GUARD_DISABLED === '1') return text;
-  if (!text) return text;
-  try {
-    const result = await checkOutput(text);
-    return result.maskedOutput;
-  } catch {
-    return text;
-  }
-}
 
 
 const DEFAULT_MODEL = 'gpt-5.4';
@@ -156,17 +124,12 @@ export class Agent {
     const ctx = createRunContext(query);
     const memoryFlushState = { alreadyFlushed: false };
 
-    // Input PII Guard — mask user query before it reaches the LLM.
-    // Stage 2 internally skips when neither Stage 1 nor obfuscation hints fire,
-    // so clean inputs add ~0ms overhead.
-    const maskedQuery = await maskUserInput(query);
-
     // Build initial message array
     const historyMessages = inMemoryHistory?.getRecentTurnsAsMessages() ?? [];
     let messages: BaseMessage[] = [
       new SystemMessage(this.systemPrompt),
       ...historyMessages,
-      new HumanMessage(maskedQuery),
+      new HumanMessage(query),
     ];
 
     // ─── OpenInference: AGENT span wraps the whole run ───────────────────
@@ -176,12 +139,20 @@ export class Agent {
         [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.AGENT,
         [SemanticConventions.AGENT_NAME]: 'dexter',
         [SemanticConventions.LLM_MODEL_NAME]: this.model,
-        [SemanticConventions.INPUT_VALUE]: truncate(maskedQuery),
+        [SemanticConventions.INPUT_VALUE]: truncate(query),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
       },
     });
     const agentCtx = trace.setSpan(otelContext.active(), agentSpan);
     this.toolExecutor.setParentContext(agentCtx);
+
+    // Capture root span/trace IDs so evaluator scripts can attach Phoenix
+    // annotations to the AGENT span. Returns zero-IDs when telemetry is
+    // disabled — consumers must check before posting.
+    const sc = agentSpan.spanContext();
+    const isValidSpanId = sc.spanId && sc.spanId !== '0'.repeat(16);
+    const agentSpanId = isValidSpanId ? sc.spanId : undefined;
+    const traceId = isValidSpanId ? sc.traceId : undefined;
 
     let finalAnswerForSpan = '';
     let agentError: unknown = undefined;
@@ -273,6 +244,8 @@ export class Agent {
                 totalTime,
                 tokenUsage: ctx.tokenCounter.getUsage(),
                 tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+                agentSpanId,
+                traceId,
               };
               return;
             }
@@ -309,11 +282,10 @@ export class Agent {
           yield { type: 'thinking', message: trimmedText };
         }
 
-        // No tool calls = final answer — apply Output Guard before emit.
+        // No tool calls = final answer
         if (!hasToolCalls(response)) {
-          const safeAnswer = await maskAgentOutput(responseText ?? '');
-          finalAnswerForSpan = safeAnswer;
-          yield* this.handleDirectResponse(safeAnswer, ctx);
+          finalAnswerForSpan = responseText ?? '';
+          yield* this.handleDirectResponse(responseText ?? '', ctx, { agentSpanId, traceId });
           return;
         }
 
@@ -352,6 +324,8 @@ export class Agent {
             totalTime,
             tokenUsage: ctx.tokenCounter.getUsage(),
             tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+            agentSpanId,
+            traceId,
           };
           return;
         }
@@ -385,6 +359,8 @@ export class Agent {
         totalTime,
         tokenUsage: ctx.tokenCounter.getUsage(),
         tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+        agentSpanId,
+        traceId,
       };
     } catch (err) {
       agentError = err;
@@ -578,11 +554,10 @@ export class Agent {
   // Response handling
   // ---------------------------------------------------------------------------
 
-  // Caller must pass already-PII-masked text (see Output Guard call site
-  // in run() where !hasToolCalls(response) branch invokes maskAgentOutput).
   private async *handleDirectResponse(
     responseText: string,
     ctx: RunContext,
+    spanIds?: { agentSpanId?: string; traceId?: string },
   ): AsyncGenerator<AgentEvent, void> {
     const totalTime = Date.now() - ctx.startTime;
     yield {
@@ -593,6 +568,8 @@ export class Agent {
       totalTime,
       tokenUsage: ctx.tokenCounter.getUsage(),
       tokensPerSecond: ctx.tokenCounter.getTokensPerSecond(totalTime),
+      agentSpanId: spanIds?.agentSpanId,
+      traceId: spanIds?.traceId,
     };
   }
 

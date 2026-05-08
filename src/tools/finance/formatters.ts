@@ -37,10 +37,11 @@ function fmtPrice(n: unknown): string {
   return `$${num.toFixed(2)}`;
 }
 
-function fmtDate(d: unknown): string {
+function fmtDate(d: unknown, fiscalPeriod?: unknown): string {
   if (!d) return '—';
+  // Use fiscal_period label if available (e.g., "FY2024", "Q3 FY2025")
+  if (fiscalPeriod && typeof fiscalPeriod === 'string') return fiscalPeriod;
   const str = String(d);
-  // "2024-12-31" → "Q4 24" for quarterly, "2024" for annual
   if (str.length >= 10) {
     const month = parseInt(str.slice(5, 7), 10);
     const year = str.slice(2, 4);
@@ -61,10 +62,10 @@ export function formatIncomeStatements(data: unknown, args?: Rec): string {
   if (items.length === 0) return 'No income statement data available.';
   const ticker = (args?.ticker as string)?.toUpperCase() ?? '';
   const lines = [`${ticker} Income Statement`, ''];
-  lines.push('| Period | Revenue | Op Inc | Net Inc | EPS |');
-  lines.push('|--------|---------|--------|---------|-----|');
+  lines.push('| Period | Revenue | Op Inc | Net Inc | R&D | EPS |');
+  lines.push('|--------|---------|--------|---------|-----|-----|');
   for (const row of items as Rec[]) {
-    lines.push(`| ${fmtDate(row.report_period)} | ${fmtNum(row.revenue)} | ${fmtNum(row.operating_income)} | ${fmtNum(row.net_income)} | ${fmtPrice(row.earnings_per_share ?? row.basic_earnings_per_share)} |`);
+    lines.push(`| ${fmtDate(row.report_period, row.fiscal_period)} | ${fmtNum(row.revenue)} | ${fmtNum(row.operating_income)} | ${fmtNum(row.net_income)} | ${fmtNum(row.research_and_development)} | ${fmtPrice(row.earnings_per_share ?? row.basic_earnings_per_share)} |`);
   }
   return lines.join('\n');
 }
@@ -77,7 +78,7 @@ export function formatBalanceSheets(data: unknown, args?: Rec): string {
   lines.push('| Period | Total Assets | Total Liab | Equity | Cash |');
   lines.push('|--------|-------------|------------|--------|------|');
   for (const row of items as Rec[]) {
-    lines.push(`| ${fmtDate(row.report_period)} | ${fmtNum(row.total_assets)} | ${fmtNum(row.total_liabilities)} | ${fmtNum(row.shareholders_equity ?? row.total_equity)} | ${fmtNum(row.cash_and_equivalents)} |`);
+    lines.push(`| ${fmtDate(row.report_period, row.fiscal_period)} | ${fmtNum(row.total_assets)} | ${fmtNum(row.total_liabilities)} | ${fmtNum(row.shareholders_equity ?? row.total_equity)} | ${fmtNum(row.cash_and_equivalents)} |`);
   }
   return lines.join('\n');
 }
@@ -93,7 +94,7 @@ export function formatCashFlowStatements(data: unknown, args?: Rec): string {
     const opCF = Number(row.operating_cash_flow ?? row.net_cash_flow_from_operations ?? 0);
     const capex = Math.abs(Number(row.capital_expenditure ?? row.capital_expenditures ?? 0));
     const fcf = opCF - capex;
-    lines.push(`| ${fmtDate(row.report_period)} | ${fmtNum(opCF)} | ${fmtNum(capex)} | ${fmtNum(fcf)} |`);
+    lines.push(`| ${fmtDate(row.report_period, row.fiscal_period)} | ${fmtNum(opCF)} | ${fmtNum(capex)} | ${fmtNum(fcf)} |`);
   }
   return lines.join('\n');
 }

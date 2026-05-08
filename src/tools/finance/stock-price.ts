@@ -44,14 +44,21 @@ export const getStockPrices = new DynamicStructuredTool({
     'Retrieves historical price data for a stock over a specified date range, including open, high, low, close prices and volume.',
   schema: StockPricesInputSchema,
   func: async (input) => {
+    // API requires start_date < end_date; bump end by 1 day if equal
+    let endDateStr = input.end_date;
+    if (input.start_date === input.end_date) {
+      const d = new Date(input.end_date + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      endDateStr = d.toISOString().slice(0, 10);
+    }
     const params = {
       ticker: input.ticker.trim().toUpperCase(),
       interval: input.interval,
       start_date: input.start_date,
-      end_date: input.end_date,
+      end_date: endDateStr,
     };
     // Cache when the date window is fully closed (OHLCV data is final)
-    const endDate = new Date(input.end_date + 'T00:00:00');
+    const endDate = new Date(endDateStr + 'T00:00:00');
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const { data, url } = await api.get('/prices/', params, { cacheable: endDate < today });

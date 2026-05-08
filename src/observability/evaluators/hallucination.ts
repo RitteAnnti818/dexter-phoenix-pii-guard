@@ -14,21 +14,41 @@ import type {
   ToolCallCapture,
 } from './types.js';
 import { judgeWithLlm } from './judge.js';
+import { GROUNDEDNESS_SYSTEM_PROMPT } from './prompts.js';
 
 // Matches a number with optional thousands separators, decimals, and
 // magnitude suffixes (B/M/K/T or 억/조/만). Captures the raw token; the
 // caller normalizes it to billions for comparison.
-const NUMERIC_REGEX = /(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(조|억|만|[BMKT])?/gi;
+//
+// The first alternative ends with `(?!\d)` so a 4+ digit token without
+// thousand separators (e.g. "FY2024") doesn't degenerate into a 3-digit
+// match like "202". Without this guard, "FY2024" → 202 silently passed
+// for any GT range near 200B (Q019 false-positive in baseline).
+const NUMERIC_REGEX = /(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?!\d)|\d+(?:\.\d+)?)\s*(조|억|만|[BMKT])?/gi;
 
+// Mathematically correct conversion to billions of (USD-equivalent) units.
+// 1조 = 10^12 = 1000B, 1억 = 10^8 = 0.1B, 1만 = 10^4 = 0.00001B.
+// The original coefficients were each ~10× too small, so a Korean-unit
+// answer with the right value scored as a miss (Q001 v2 etc.).
 const MAGNITUDE_TO_BILLIONS: Record<string, number> = {
   T: 1000,
   B: 1,
   M: 0.001,
   K: 0.000001,
-  '조': 100,        // 1조원 ≈ assumes the answer normalizes to USD billions; treat 조 as 100B as a coarse hint
-  '억': 0.01,
-  '만': 0.0000001,
+  '조': 1000,
+  '억': 0.1,
+  '만': 0.00001,
 };
+
+// Skip evaluation entirely when the agent never produced a real answer.
+// Without this, the regex happily extracts the "8" from "Reached maximum
+// iterations (8)" and matches it against any GT range covering 8 (Q026,
+// Q037 baseline false-positives).
+const FAILURE_PATTERNS: RegExp[] = [
+  /^Reached maximum iterations/i,
+  /^Error:\s/i,
+  /^An error occurred/i,
+];
 
 /**
  * Pull every number from text and convert to a canonical "billions" scale
@@ -68,6 +88,14 @@ export function evaluateFactualAccuracy(
     };
   }
   const [lo, hi] = range;
+  const trimmed = run.finalAnswer.trim();
+  if (FAILURE_PATTERNS.some((p) => p.test(trimmed))) {
+    return {
+      score: 0,
+      label: 'incorrect',
+      explanation: `agent did not produce an answer (matched failure pattern); GT range was [${lo}, ${hi}]`,
+    };
+  }
   const candidates = extractNumericValues(run.finalAnswer);
   if (candidates.length === 0) {
     return {
@@ -102,21 +130,6 @@ function concatToolOutputs(toolCalls: ToolCallCapture[], maxChars = 8000): strin
   const joined = chunks.join('\n\n');
   return joined.length > maxChars ? `${joined.slice(0, maxChars)}\n...[truncated]` : joined;
 }
-
-const GROUNDEDNESS_SYSTEM_PROMPT = `You are evaluating whether a financial AI agent's answer is fully grounded in the data sources it actually retrieved.
-
-Definition of "grounded":
-- Every concrete claim in the answer (numbers, dates, segment breakdowns, growth rates) must be either present in the tool outputs OR be a straightforward arithmetic transformation of values present.
-- Hedging language ("approximately", "roughly") is fine if the underlying number is grounded.
-- Restating the question or generic context (industry knowledge, company description) is acceptable.
-
-Score buckets:
-- 1.0 = "correct": every concrete claim is supported by tool outputs.
-- 0.5 = "partial": at least one concrete claim is grounded, but at least one is missing or fabricated. Use this only when the answer is mostly right.
-- 0.0 = "incorrect": the answer's key claim has no support, or the agent never called any tool.
-
-Return JSON ONLY in this exact shape:
-{"score": <0.0-1.0>, "label": "correct"|"partial"|"incorrect", "reason": "<one sentence>"}`;
 
 /** Evaluator #2 — LLM-as-Judge: is every claim in the answer in the tool outputs? */
 export async function evaluateGroundedness(

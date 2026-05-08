@@ -18,6 +18,8 @@ const SegmentedRevenuesInputSchema = z.object({
       "The reporting period for the segmented revenues. 'annual' for yearly, 'quarterly' for quarterly."
     ),
   limit: z.number().default(4).describe('The number of past periods to retrieve (default: 4). Increase when broader historical segment trends are required.'),
+  report_period_gte: z.string().optional().describe('Filter for segments with report periods on or after this date (YYYY-MM-DD).'),
+  report_period_lte: z.string().optional().describe('Filter for segments with report periods on or before this date (YYYY-MM-DD).'),
 });
 
 export const getSegmentedRevenues = new DynamicStructuredTool({
@@ -29,10 +31,12 @@ export const getSegmentedRevenues = new DynamicStructuredTool({
       ticker: input.ticker,
       period: input.period,
       limit: input.limit,
+      report_period_gte: input.report_period_gte,
+      report_period_lte: input.report_period_lte,
     };
-    const { data, url } = await api.get('/financials/segmented-revenues/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await api.get('/financials/segments/', params, { cacheable: true, ttlMs: TTL_24H });
     return formatToolResult(
-      stripFieldsDeep(data.segmented_revenues || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data.segmented_financials || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },
