@@ -6,7 +6,7 @@ import {
   type PIIDetection,
   type PIIType,
 } from './regexGuard.js';
-import { llmDetect } from './llmGuard.js';
+import { hasStage2EscalationHint, llmDetect } from './llmGuard.js';
 
 export type PiiGuardAction = 'allow' | 'mask' | 'block';
 export type PiiGuardDirection = 'input' | 'output' | 'trace' | 'storage' | 'log';
@@ -35,6 +35,11 @@ export interface PiiGuardResult {
   action: PiiGuardAction;
   maskedText: string;
   detections: PIIDetection[];
+  stageDetections: {
+    stage1: PIIDetection[];
+    deterministic: PIIDetection[];
+    stage2: PIIDetection[];
+  };
   stageStats: PiiGuardStageStats;
   leakedFingerprints: string[];
   riskReasons: string[];
@@ -117,12 +122,19 @@ export async function guardText(
   let combined = dedupeOverlapping([...stage1, ...deterministic]);
 
   const stage2Mode = context.stage2 ?? 'auto';
-  const shouldRunStage2 = stage2Mode === 'force' || (stage2Mode === 'auto' && combined.length === 0);
+  const shouldRunStage2 =
+    stage2Mode === 'force' ||
+    (stage2Mode === 'auto' && combined.length === 0 && hasStage2EscalationHint(text));
   let stage2: PIIDetection[] = [];
   let stage2TimedOut = false;
 
   if (shouldRunStage2) {
-    const stage2Result = await runStage2(text, combined, context.timeoutMs ?? DEFAULT_STAGE2_TIMEOUT_MS);
+    const stage2Result = await runStage2(
+      text,
+      combined,
+      context.timeoutMs ?? getStage2TimeoutMs(),
+      stage2Mode === 'force',
+    );
     stage2 = stage2Result.detections;
     stage2TimedOut = stage2Result.timedOut;
     combined = dedupeOverlapping([...combined, ...stage2]);
@@ -160,6 +172,11 @@ export async function guardText(
     detections: combined,
     leakedFingerprints,
     riskReasons,
+    stageDetections: {
+      stage1,
+      deterministic,
+      stage2,
+    },
     stageStats: {
       stage1Count: stage1.length,
       deterministicCount: deterministic.length,
@@ -381,11 +398,12 @@ async function runStage2(
   text: string,
   stage1: PIIDetection[],
   timeoutMs: number,
+  force: boolean,
 ): Promise<{ detections: PIIDetection[]; timedOut: boolean }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      llmDetect(text, { stage1Detections: stage1 }).then((detections) => ({
+      llmDetect(text, { stage1Detections: stage1, alwaysRun: force }).then((detections) => ({
         detections,
         timedOut: false,
       })),
@@ -437,6 +455,13 @@ function isGuardDisabled(): boolean {
   return process.env.PII_GUARD_DISABLED === '1';
 }
 
+function getStage2TimeoutMs(): number {
+  const raw = process.env.PII_GUARD_STAGE2_TIMEOUT_MS;
+  if (!raw) return DEFAULT_STAGE2_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STAGE2_TIMEOUT_MS;
+}
+
 function buildResult(
   action: PiiGuardAction,
   maskedText: string,
@@ -448,6 +473,11 @@ function buildResult(
     action,
     maskedText,
     detections,
+    stageDetections: {
+      stage1: [],
+      deterministic: [],
+      stage2: [],
+    },
     leakedFingerprints: [],
     riskReasons: [],
     stageStats: { ...stats, latencyMs: Date.now() - startedAt },

@@ -21,6 +21,9 @@ let oiTracer: OITracer | null = null;
 
 export function initTelemetry(projectName?: string): void {
   if (sdk) return;
+  if (process.env.PHOENIX_DISABLED === '1') {
+    return;
+  }
 
   // Surface OTLP exporter errors to stderr so silent network/auth failures
   // don't disguise themselves as "no traces showing up". Set

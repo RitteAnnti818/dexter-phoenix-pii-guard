@@ -119,19 +119,7 @@ const TYPE_LOOKUP: Record<string, PIIType> = {
 };
 
 const HIGH_CONFIDENCE_THRESHOLD = 0.85;
-
-// Patterns that hint at obfuscation requiring Stage 2 LLM. If none of these
-// trigger AND Stage 1 found nothing, the input is almost certainly clean and
-// we can skip the LLM call.
-const OBFUSCATION_HINTS: RegExp[] = [
-  /[공일이삼사오육칠팔구영]\s*[공일이삼사오육칠팔구영]/,  // korean numerals (consecutive)
-  /역순|거꾸로|뒤집/,                                      // reversed PII keywords
-  /[가-힣]씨/,                                             // 성씨 (DEMOGRAPHIC)
-  /\d+\s*(년생|세|살|대)/,                                 // age / 출생연도
-  /[가-힣]+(구|동)/,                                       // 거주지 (구/동)
-  /다니는|근무|거주/,                                      // 직장/거주
-  /[a-zA-Z]\s[a-zA-Z]\s[a-zA-Z]\s*[.@]/,                   // letter-spaced email
-];
+const KOREAN_NUMERAL_SEQUENCE_RE = /[공영령일이삼사오육륙칠팔구][공영령일이삼사오육륙칠팔구\s\-.@_*]*/g;
 
 export interface LlmGuardOptions {
   /** Stage 1 detections — used for escalation gating */
@@ -153,10 +141,42 @@ export function shouldSkipStage2(
   if (stage1 && stage1.some((d) => d.confidence >= HIGH_CONFIDENCE_THRESHOLD)) {
     return true;
   }
-  if (!OBFUSCATION_HINTS.some((re) => re.test(text))) {
+  if (!hasStage2EscalationHint(text)) {
     return true;
   }
   return false;
+}
+
+// Patterns that hint at obfuscation requiring Stage 2 LLM. If none of these
+// trigger AND Stage 1 found nothing, the input is almost certainly clean and
+// we can skip the LLM call. Keep this conservative: broad Korean suffix
+// matches are costly and can turn clean finance prompts into LLM timeouts.
+export function hasStage2EscalationHint(text: string): boolean {
+  return (
+    hasKoreanNumeralSequenceHint(text) ||
+    /역순|거꾸로|뒤집/.test(text) ||
+    /(?:^|[^가-힣])[가-힣]씨(?:\s|$|[^가-힣])/.test(text) ||
+    /\d+\s*(년생|세|살|대)/.test(text) ||
+    hasLocationContextHint(text) ||
+    /다니는|근무|거주/.test(text) ||
+    /[a-zA-Z]\s[a-zA-Z]\s[a-zA-Z]\s*[.@]/.test(text)
+  );
+}
+
+function hasKoreanNumeralSequenceHint(text: string): boolean {
+  KOREAN_NUMERAL_SEQUENCE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = KOREAN_NUMERAL_SEQUENCE_RE.exec(text)) !== null) {
+    const koreanDigitCount = match[0].replace(/[^공영령일이삼사오육륙칠팔구]/g, '').length;
+    if (koreanDigitCount >= 3) return true;
+  }
+  return false;
+}
+
+function hasLocationContextHint(text: string): boolean {
+  const location = '[가-힣]{2,}(?:구|동)';
+  const context = '(?:거주|사는|주소|프로필|주민|신원)';
+  return new RegExp(`${context}.{0,12}${location}|${location}.{0,12}${context}`).test(text);
 }
 
 export async function llmDetect(

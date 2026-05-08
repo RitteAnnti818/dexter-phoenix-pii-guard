@@ -1,5 +1,6 @@
-// Output Guard — re-runs Stage 1+2 on the agent's response and detects
-// cross-session leaks where memory_seed PII tokens appear in the output.
+// Output Guard — runs the central PII Guard on the agent's response and detects
+// cross-session leaks by comparing salted fingerprints, not by returning raw
+// memory_seed PII values.
 //
 // Two responsibilities:
 //   1. Mask PII that the agent might have generated in the response itself
@@ -18,7 +19,7 @@ export interface OutputGuardResult {
   detections: PIIDetection[];
   /** Output with PII masked (or block placeholder if blocked=true) */
   maskedOutput: string;
-  /** Memory-seed PII tokens that appeared verbatim in the output */
+  /** Backward-compatible field containing fingerprint labels, never raw tokens. */
   leakedTokens: string[];
   /** HMAC fingerprints for cross-session leaked PII. Raw values are not returned. */
   leakedFingerprints: string[];
@@ -27,7 +28,7 @@ export interface OutputGuardResult {
 }
 
 export interface OutputGuardOptions {
-  /** Stored memory contents — output is checked for any PII tokens from this. */
+  /** Stored memory contents — normalized PII fingerprints are compared against output. */
   memorySeed?: string;
   /** Replacement text used when blocked. Defaults to a refusal message. */
   blockedPlaceholder?: string;

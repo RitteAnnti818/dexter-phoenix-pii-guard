@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Sanity check — runs Stage 1 (regex) + Stage 2 (LLM) combined against the
+ * Sanity check — runs the production PII Guard orchestrator against the
  * 100-sample PII dataset and reports per-category / per-pattern coverage.
  *
  * Usage:
@@ -15,13 +15,8 @@
 
 import 'dotenv/config';
 
-import {
-  regexDetect,
-  maskText,
-  dedupeOverlapping,
-  type PIIDetection,
-} from '../src/observability/guards/regexGuard.js';
-import { llmDetect } from '../src/observability/guards/llmGuard.js';
+import type { PIIDetection } from '../src/observability/guards/regexGuard.js';
+import { guardInput } from '../src/observability/guards/piiGuard.js';
 
 interface Row {
   id: string;
@@ -65,6 +60,7 @@ function selectRows(all: Row[], args: CliArgs): Row[] {
 interface Result {
   row: Row;
   stage1: PIIDetection[];
+  deterministic: PIIDetection[];
   stage2: PIIDetection[];
   combined: PIIDetection[];
   actualMasked: string;
@@ -82,17 +78,24 @@ const rows = selectRows(allRows, args);
 
 console.error(`[check-stage2] running ${rows.length}/${allRows.length} rows...`);
 
+function formatDetections(detections: PIIDetection[]): string {
+  return detections
+    .map((d) => `${d.type}="[REDACTED_${d.type.toUpperCase()}]" (${d.confidence.toFixed(2)})`)
+    .join(', ');
+}
+
 const results: Result[] = [];
 for (let i = 0; i < rows.length; i++) {
   const row = rows[i];
   process.stderr.write(`[${i + 1}/${rows.length}] ${row.id} (${row.category})... `);
 
-  const t0 = Date.now();
-  const stage1 = regexDetect(row.input);
-  const stage2 = await llmDetect(row.input, { stage1Detections: stage1 });
-  const combined = dedupeOverlapping([...stage1, ...stage2]);
-  const actualMasked = maskText(row.input, combined);
-  const latencyMs = Date.now() - t0;
+  const result = await guardInput(row.input, { surface: 'eval', direction: 'input' });
+  const stage1 = result.stageDetections.stage1;
+  const deterministic = result.stageDetections.deterministic;
+  const stage2 = result.stageDetections.stage2;
+  const combined = result.detections;
+  const actualMasked = result.maskedText;
+  const latencyMs = result.stageStats.latencyMs;
 
   const detected = combined.length > 0;
   const maskCorrect = actualMasked === row.expected_masked;
@@ -104,8 +107,8 @@ for (let i = 0; i < rows.length; i++) {
   else if (!row.contains_pii && detected) outcome = 'FP';
   else outcome = 'TN';
 
-  results.push({ row, stage1, stage2, combined, actualMasked, detected, maskCorrect, outcome, latencyMs });
-  process.stderr.write(`${outcome} (${latencyMs}ms, s1=${stage1.length} s2=${stage2.length})\n`);
+  results.push({ row, stage1, deterministic, stage2, combined, actualMasked, detected, maskCorrect, outcome, latencyMs });
+  process.stderr.write(`${outcome} (${latencyMs}ms, s1=${stage1.length} det=${deterministic.length} s2=${stage2.length})\n`);
 }
 
 // ---- Summary ----------------------------------------------------------------
@@ -180,14 +183,17 @@ if (failures.length > 0) {
   console.log(`\n─── Failures (${failures.length}) ───────────────────────────────────────`);
   for (const f of failures.slice(0, 20)) {
     console.log(`[${f.outcome}] ${f.row.id} (${f.row.category}${f.row.obfuscation_pattern ? '/' + f.row.obfuscation_pattern : ''})`);
-    console.log(`  input:    ${f.row.input}`);
+    console.log(`  input:    ${f.actualMasked}`);
     console.log(`  expected: ${f.row.expected_masked}`);
     console.log(`  actual:   ${f.actualMasked}`);
     if (f.stage1.length > 0) {
-      console.log(`  stage1:   ${f.stage1.map((d) => `${d.type}=${JSON.stringify(d.match)} (${d.confidence.toFixed(2)})`).join(', ')}`);
+      console.log(`  stage1:   ${formatDetections(f.stage1)}`);
+    }
+    if (f.deterministic.length > 0) {
+      console.log(`  det:      ${formatDetections(f.deterministic)}`);
     }
     if (f.stage2.length > 0) {
-      console.log(`  stage2:   ${f.stage2.map((d) => `${d.type}=${JSON.stringify(d.match)} (${d.confidence.toFixed(2)})`).join(', ')}`);
+      console.log(`  stage2:   ${formatDetections(f.stage2)}`);
     }
     console.log('');
   }

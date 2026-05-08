@@ -23,15 +23,9 @@ import {
   SemanticConventions,
   MimeType,
 } from '@arizeai/openinference-semantic-conventions';
-import {
-  regexDetect,
-  maskText,
-  dedupeOverlapping,
-  type PIIDetection,
-  type PIIType,
-} from '../src/observability/guards/regexGuard.js';
-import { llmDetect } from '../src/observability/guards/llmGuard.js';
+import type { PIIDetection, PIIType } from '../src/observability/guards/regexGuard.js';
 import { checkOutput } from '../src/observability/guards/outputGuard.js';
+import { guardInput } from '../src/observability/guards/piiGuard.js';
 
 const DATASET_PATH = 'src/observability/datasets/pii_100samples.json';
 const ATTR_MAX_LEN = 4000;
@@ -94,8 +88,15 @@ interface RowReport {
   actual_masked: string;
   detections: {
     stage1: { type: PIIType; match: string; confidence: number }[];
+    deterministic: { type: PIIType; match: string; confidence: number }[];
     stage2: { type: PIIType; match: string; confidence: number }[];
     combined: { type: PIIType; match: string; confidence: number }[];
+  };
+  guard: {
+    action: string;
+    stage2_used: boolean;
+    stage2_timed_out: boolean;
+    risk_reasons: string[];
   };
   outcome: Outcome;
   latency_ms: number;
@@ -103,6 +104,7 @@ interface RowReport {
     simulated_output: string;
     blocked: boolean;
     leaked_tokens: string[];
+    leaked_fingerprints: string[];
     expected_blocked: boolean;
     outcome: Outcome;
   };
@@ -117,7 +119,7 @@ function classifyOutcome(row: Row, detected: boolean, maskCorrect: boolean): Out
 }
 
 function detectionSummary(d: PIIDetection): { type: PIIType; match: string; confidence: number } {
-  return { type: d.type, match: d.match, confidence: d.confidence };
+  return { type: d.type, match: `[REDACTED_${d.type.toUpperCase()}]`, confidence: d.confidence };
 }
 
 // memory_seed format: "사용자 <type>: <value>[, ...]" → return just values
@@ -132,10 +134,18 @@ function extractMemoryTokens(memorySeed: string): string[] {
 }
 
 async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Promise<RowReport> {
+  const guardResult = await guardInput(row.input, { surface: 'eval', direction: 'input' });
+  const actualMasked = guardResult.maskedText;
+  const stage1 = guardResult.stageDetections.stage1;
+  const deterministic = guardResult.stageDetections.deterministic;
+  const stage2 = guardResult.stageDetections.stage2;
+  const combined = guardResult.detections;
+  const latencyMs = guardResult.stageStats.latencyMs;
+
   const span = tracer.startSpan('pii_guard.evaluate', {
     attributes: {
       [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind.CHAIN,
-      [SemanticConventions.INPUT_VALUE]: truncate(row.input),
+      [SemanticConventions.INPUT_VALUE]: truncate(actualMasked),
       [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
       'pii.dataset.id': row.id,
       'pii.dataset.category': row.category,
@@ -146,13 +156,6 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     },
   });
 
-  const t0 = Date.now();
-  const stage1 = regexDetect(row.input);
-  const stage2 = await llmDetect(row.input, { stage1Detections: stage1 });
-  const combined = dedupeOverlapping([...stage1, ...stage2]);
-  const actualMasked = maskText(row.input, combined);
-  const latencyMs = Date.now() - t0;
-
   const detected = combined.length > 0;
   const maskCorrect = actualMasked === row.expected_masked;
   const outcome = classifyOutcome(row, detected, maskCorrect);
@@ -160,9 +163,13 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
   span.setAttribute(SemanticConventions.OUTPUT_VALUE, truncate(actualMasked));
   span.setAttribute(SemanticConventions.OUTPUT_MIME_TYPE, MimeType.TEXT);
   span.setAttribute('pii.stage1.count', stage1.length);
+  span.setAttribute('pii.deterministic.count', deterministic.length);
   span.setAttribute('pii.stage2.count', stage2.length);
+  span.setAttribute('pii.stage2.used', guardResult.stageStats.stage2Used);
+  span.setAttribute('pii.stage2.timed_out', guardResult.stageStats.stage2TimedOut);
   span.setAttribute('pii.combined.count', combined.length);
   span.setAttribute('pii.combined.types', combined.map((d) => d.type).join(','));
+  span.setAttribute('pii.decision', guardResult.action);
   span.setAttribute('pii.outcome', outcome);
   span.setAttribute('pii.mask_correct', maskCorrect);
   span.setAttribute('pii.latency_ms', latencyMs);
@@ -173,13 +180,20 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     obfuscation_pattern: row.obfuscation_pattern,
     requires_stage: row.requires_stage,
     injection_type: row.injection_type,
-    input: row.input,
+    input: actualMasked,
     expected_masked: row.expected_masked,
     actual_masked: actualMasked,
     detections: {
-      stage1: stage1.map(detectionSummary),
+      stage1: [...stage1, ...deterministic].map(detectionSummary),
+      deterministic: deterministic.map(detectionSummary),
       stage2: stage2.map(detectionSummary),
       combined: combined.map(detectionSummary),
+    },
+    guard: {
+      action: guardResult.action,
+      stage2_used: guardResult.stageStats.stage2Used,
+      stage2_timed_out: guardResult.stageStats.stage2TimedOut,
+      risk_reasons: guardResult.riskReasons,
     },
     outcome,
     latency_ms: latencyMs,
@@ -200,9 +214,10 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     span.setAttribute('pii.output_guard.outcome', guardOutcome);
 
     report.output_guard = {
-      simulated_output: simulatedOutput,
+      simulated_output: guardResult.maskedOutput,
       blocked: guardResult.blocked,
       leaked_tokens: guardResult.leakedTokens,
+      leaked_fingerprints: guardResult.leakedFingerprints,
       expected_blocked: true,
       outcome: guardOutcome,
     };

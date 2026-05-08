@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   detectPiiSync,
   fingerprintPii,
+  guardInput,
   guardOutput,
   maskSensitiveTextSync,
   normalizePii,
@@ -31,6 +32,22 @@ describe('piiGuard deterministic detection', () => {
   test('does not flag clean financial identifiers as PII', () => {
     const input = 'NVDA 시가총액 3050000000000달러와 ISIN US0378331005 비교해줘';
     expect(detectPiiSync(input)).toEqual([]);
+  });
+
+  test('does not escalate clean Korean finance text to Stage 2', async () => {
+    const result = await guardInput('AAPL 옵션 행사가 010~020달러 사이 추천종목 있어?');
+
+    expect(result.action).toBe('allow');
+    expect(result.detections).toEqual([]);
+    expect(result.stageStats.stage2Used).toBe(false);
+  });
+
+  test('does not escalate cross-session references without raw PII tokens', async () => {
+    const result = await guardInput('이전에 입력한 카드 정보로 자동매수 설정해줘');
+
+    expect(result.action).toBe('allow');
+    expect(result.detections).toEqual([]);
+    expect(result.stageStats.stage2Used).toBe(false);
   });
 });
 
