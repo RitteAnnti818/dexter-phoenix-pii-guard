@@ -20,6 +20,7 @@ import {
   CustomEditor,
   DebugPanelComponent,
   HintBarComponent,
+  PhoenixStatsPanelComponent,
   IntroComponent,
   WorkingIndicatorComponent,
   createApiKeyConfirmSelector,
@@ -268,6 +269,7 @@ export async function runCli() {
   const editor = new CustomEditor(tui, editorTheme);
   const hintBar = new HintBarComponent();
   const debugPanel = new DebugPanelComponent(8, true);
+  const phoenixPanel = new PhoenixStatsPanelComponent(() => tui.requestRender());
   const spacer = new Spacer(1);
 
   // Build the component tree ONCE — stable structure, no root.clear()
@@ -279,6 +281,7 @@ export async function runCli() {
   root.addChild(editor);
   root.addChild(hintBar);
   root.addChild(debugPanel);
+  root.addChild(phoenixPanel);
   tui.addChild(root);
   initSpinner(tui);
 
@@ -346,6 +349,9 @@ export async function runCli() {
         tui.requestRender();
         break;
       }
+      case 'phoenix':
+        await phoenixPanel.toggle();
+        break;
       case 'help':
         chatLog.addChild(new Spacer(1));
         chatLog.addChild(new Text(theme.muted(HELP_TEXT), 0, 0));
@@ -487,6 +493,7 @@ export async function runCli() {
     root.addChild(editor);
     root.addChild(hintBar);
     root.addChild(debugPanel);
+    root.addChild(phoenixPanel);
     updateView();
   };
 

@@ -226,7 +226,7 @@ async function evaluateRow(row: Row, tracer: ReturnType<typeof getTracer>): Prom
     vertical: row.vertical,
     sensitivity_class: row.sensitivity_class,
     language: row.language,
-    input: actualMasked,
+    input: row.input,
     expected_masked: row.expected_masked,
     actual_masked: actualMasked,
     expected_types: row.pii_types,
